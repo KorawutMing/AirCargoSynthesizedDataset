@@ -31,12 +31,81 @@ def generate_final_dataset(years=10):
     df_full = df_routes.merge(df_time, how='cross')
     
     print("4. Applying Trade Lane Coherence...")
-    df_full['Lane_Column'] = df_full.apply(lambda x: map_trade_lane(x['Origin'], x['Destination']), axis=1)
-    
+
+    from config import BASE_PRICE_PER_KG, PRICE_VOLATILITY, SEGMENT_ELASTICITY
+
+    # -------------------------------------------------
+    # A. TRADE LANE MULTIPLIER (MUST COME FIRST)
+    # -------------------------------------------------
+    df_full['Lane_Column'] = df_full.apply(
+        lambda x: map_trade_lane(x['Origin'], x['Destination']),
+        axis=1
+    )
+
     idx, cols = pd.factorize(df_full['Lane_Column'])
-    df_full['Final_Multiplier'] = df_full.reindex(cols, axis=1).to_numpy()[np.arange(len(df_full)), idx]
-    df_full['Total_Daily_Market_Demand'] = df_full['Base_Daily_Demand_KG'] * df_full['Final_Multiplier']
-    
+
+    df_full['Final_Multiplier'] = (
+        df_full.reindex(cols, axis=1)
+            .to_numpy()[np.arange(len(df_full)), idx]
+    )
+
+    # -------------------------------------------------
+    # B. BASE PRICE BY LANE
+    # -------------------------------------------------
+    def get_base_price(origin, destination):
+        o = CITIES[origin]['macro_region']
+        d = CITIES[destination]['macro_region']
+        return BASE_PRICE_PER_KG[(o, d)]
+
+    df_full['Base_Price_per_kg'] = df_full.apply(
+        lambda x: get_base_price(x['Origin'], x['Destination']),
+        axis=1
+    )
+
+    # -------------------------------------------------
+    # C. DAILY PRICE MOVEMENT
+    # -------------------------------------------------
+    np.random.seed(7)
+
+    daily_price_noise = np.random.normal(
+        loc=1.0,
+        scale=PRICE_VOLATILITY,
+        size=len(df_full)
+    )
+
+    daily_price_noise = np.clip(daily_price_noise, 0.7, 1.5)
+
+    df_full['Price_Index'] = daily_price_noise
+
+    df_full['Final_Price_per_kg'] = (
+        df_full['Base_Price_per_kg'] *
+        df_full['Price_Index']
+    )
+
+    # -------------------------------------------------
+    # D. PRICE ELASTICITY
+    # -------------------------------------------------
+    weighted_elasticity = 0
+
+    for seg, params in SEGMENTS.items():
+        weighted_elasticity += (
+            params['weight'] *
+            SEGMENT_ELASTICITY[seg]
+        )
+
+    df_full['Elasticity_Factor'] = (
+        df_full['Price_Index'] ** (-weighted_elasticity)
+    )
+
+    # -------------------------------------------------
+    # E. FINAL MARKET DEMAND
+    # -------------------------------------------------
+    df_full['Total_Daily_Market_Demand'] = (
+        df_full['Base_Daily_Demand_KG'] *
+        df_full['Final_Multiplier'] *
+        df_full['Elasticity_Factor']
+    )
+
     print("5. Assigning Fixed Flight Schedules...")
     peak_demand = df_full.groupby(['Origin', 'Destination'])['Total_Daily_Market_Demand'].transform('max')
     target_capacity = AIRCRAFT_CAPACITY_KG * SCHEDULE_DESIGN_LOAD_FACTOR
@@ -92,8 +161,19 @@ def generate_final_dataset(years=10):
     
     # Clean up and order columns
     base_cols = [
-        'Date', 'Origin', 'Destination', 'Scheduled_Flights', 
-        'Final_True_Demand', 'Final_Constrained_Bookings', 'Is_Censored'
+        'Date',
+        'Origin',
+        'Destination',
+
+        'Scheduled_Flights',
+
+        # Capacity / censoring
+        'Final_True_Demand',
+        'Final_Constrained_Bookings',
+        'Is_Censored',
+
+        'Final_Price_per_kg',
+        'Elasticity_Factor'
     ]
     
     df_final = df_full[base_cols + curve_cols].copy()
