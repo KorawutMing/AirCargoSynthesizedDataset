@@ -15,19 +15,30 @@ def generate_temporal_dynamics(years=10, start_date='2016-01-01'):
     df_time = pd.DataFrame({'Date': dates})
     
     # 2. Map Calendar Multipliers
-    # dt.dayofweek: Monday=0, Sunday=6
     df_time['DOW'] = df_time['Date'].dt.dayofweek
     df_time['MOY'] = df_time['Date'].dt.month
     
-    df_time['DOW_Mult'] = df_time['DOW'].map(DOW_MULTIPLIERS)
-    df_time['MOY_Mult'] = df_time['MOY'].map(MOY_MULTIPLIERS)
+    base_dow = df_time['DOW'].map(DOW_MULTIPLIERS)
+    base_moy = df_time['MOY'].map(MOY_MULTIPLIERS)
+    
+    # ---------------------------------------------------------
+    # NEW: Stochastic Seasonality
+    # ---------------------------------------------------------
+    # DOW variance: +/- 5% on average (weekdays fluctuate slightly)
+    dow_noise = np.random.normal(loc=1.0, scale=0.05, size=len(df_time))
+    
+    # MOY variance: +/- 8% on average (macro monthly trends have higher variance)
+    moy_noise = np.random.normal(loc=1.0, scale=0.08, size=len(df_time))
+    
+    # Apply the noise to the base multipliers, clipping to prevent extreme outliers
+    df_time['DOW_Mult'] = np.clip(base_dow * dow_noise, 0.5, 1.5)
+    df_time['MOY_Mult'] = np.clip(base_moy * moy_noise, 0.5, 2.0)
     
     # 3. Calculate Year-over-Year (YoY) Compound Growth
-    # Every day gets a fractional exponent of the annual growth rate
     days_elapsed = (df_time['Date'] - df_time['Date'].min()).dt.days
     df_time['YoY_Mult'] = YOY_GROWTH_RATE ** (days_elapsed / 365.25)
     
-    # Base multiplier before random lane noise
+    # Base multiplier now contains stochastic day-to-day and month-to-month jitter
     df_time['Base_Mult'] = df_time['DOW_Mult'] * df_time['MOY_Mult'] * df_time['YoY_Mult']
     
     # 4. Generate Trade Lane Coherence Vectors
