@@ -23,7 +23,7 @@ class NaiveUnconstrainer(BaseUnconstrainer):
     Baseline Model: Ignores the capacity constraint.
     Assumes observed bookings perfectly represent latent demand.
     """
-    def fit(self, observed_bookings, is_censored, capacity=None, max_iter=None, tol=None):
+    def fit(self, observed_bookings, is_censored, capacity=None, price_per_kg=None, max_iter=None, tol=None):
         # We simply return the observations. No "lift" is applied.
         y = observed_bookings.copy().astype(float)
         return y
@@ -39,7 +39,7 @@ class EMUnconstrainer(BaseUnconstrainer):
         self.mu = None
         self.sigma = None
 
-    def fit(self, observed_bookings, is_censored, capacity, max_iter=100, tol=1e-5):
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-5):
         y = observed_bookings.copy().astype(float)
         cens = np.asarray(is_censored, dtype=bool)
         
@@ -96,7 +96,7 @@ class MARSSEMUnconstrainer(BaseUnconstrainer):
         self.mu_0 = None
         self.P0 = None
 
-    def fit(self, observed_bookings, is_censored, capacity, max_iter=100, tol=1e-4):
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-4):
         y = np.asarray(observed_bookings, dtype=float)
         cens = np.asarray(is_censored, dtype=bool)
         T = len(y)
@@ -230,3 +230,146 @@ class MARSSEMUnconstrainer(BaseUnconstrainer):
                 final_imputed[t] = mu_s + np.sqrt(S_s) * lam
 
         return final_imputed
+    
+
+# ==========================================================
+# PRICE-AWARE UNCONSTRAINERS
+# Add below your existing classes in unconstrainers.py
+# ==========================================================
+
+import numpy as np
+from scipy.stats import norm
+
+class MARSSXPriceUnconstrainer(BaseUnconstrainer):
+    """
+    Practical price-aware dynamic model.
+    """
+    def __init__(self):
+        super().__init__()
+        self.beta0 = None
+        self.beta1 = None
+        self.core_model = MARSSEMUnconstrainer()
+
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg, max_iter=100, tol=1e-4):
+        y = np.asarray(observed_bookings, dtype=float)
+        cens = np.asarray(is_censored, dtype=bool)
+        p = np.asarray(price_per_kg, dtype=float)
+
+        # Handle scalar capacity
+        if np.isscalar(capacity):
+            cap_arr = np.full(len(y), capacity, dtype=float)
+        else:
+            cap_arr = np.asarray(capacity, dtype=float)
+
+        # ---------- Estimate price relationship ----------
+        mask = ~cens
+        if np.sum(mask) < 3:
+            mask = np.ones(len(y), dtype=bool)
+
+        X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
+        beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
+
+        self.beta0 = beta[0]
+        self.beta1 = beta[1]
+
+        price_component = self.beta0 + self.beta1 * p
+
+        # Residual demand
+        residual = y - price_component
+        
+        # BUG FIX: Convert capacity to residual space
+        residual_capacity = cap_arr - price_component
+
+        # Run MARSS on residual
+        residual_est = self.core_model.fit(
+            observed_bookings=residual,
+            is_censored=cens,
+            capacity=residual_capacity,  # <-- Pass the adjusted capacity here
+            max_iter=max_iter,
+            tol=tol
+        )
+
+        final_est = residual_est + price_component
+
+        return final_est
+
+
+class EMPriceUnconstrainer(BaseUnconstrainer):
+    """
+    Truncated Normal EM with price-dependent mean.
+    """
+    def __init__(self):
+        super().__init__()
+        self.beta0 = None
+        self.beta1 = None
+        self.sigma = None
+
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg, max_iter=100, tol=1e-5):
+        y = np.asarray(observed_bookings, dtype=float).copy()
+        cens = np.asarray(is_censored, dtype=bool)
+        p = np.asarray(price_per_kg, dtype=float)
+
+        if np.isscalar(capacity):
+            cap = np.full(len(y), capacity, dtype=float)
+        else:
+            cap = np.asarray(capacity, dtype=float)
+
+        # ---------- Initial OLS using uncensored ----------
+        mask = ~cens
+        if np.sum(mask) < 3:
+            mask = np.ones(len(y), dtype=bool)
+
+        X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
+        beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
+
+        self.beta0 = beta[0]
+        self.beta1 = beta[1]
+        self.sigma = max(np.std(y[mask]), 1.0)
+
+        for i in range(max_iter):
+            prev_b0 = self.beta0
+            prev_b1 = self.beta1
+
+            mu = self.beta0 + self.beta1 * p
+
+            # ---------- E STEP ----------
+            idx = np.where(cens)[0]
+
+            if len(idx) > 0:
+                a = (cap[idx] - mu[idx]) / self.sigma
+                a = np.clip(a, -5, 5)
+
+                tail = np.clip(1 - norm.cdf(a), 1e-12, 1.0)
+                lam = norm.pdf(a) / tail
+
+                # Calculate imputation
+                imputed_values = mu[idx] + self.sigma * lam
+                
+                # BUG FIX: Circuit breaker to stop runaway OLS feedback loop.
+                # Hard limit the estimation to 2x the flight's capacity
+                max_allowed = cap[idx] * 2.0 
+                y[idx] = np.minimum(imputed_values, max_allowed)
+
+            # ---------- M STEP ----------
+            Xall = np.column_stack([np.ones(len(y)), p])
+            beta = np.linalg.lstsq(Xall, y, rcond=None)[0]
+
+            self.beta0 = beta[0]
+            self.beta1 = beta[1]
+
+            resid = y - (self.beta0 + self.beta1 * p)
+            self.sigma = max(np.std(resid), 1.0)
+
+            self.history.append({
+                "iter": i + 1,
+                "beta0": self.beta0,
+                "beta1": self.beta1,
+                "sigma": self.sigma
+            })
+
+            diff = abs(self.beta0 - prev_b0) + abs(self.beta1 - prev_b1)
+
+            if diff < tol:
+                break
+
+        return y

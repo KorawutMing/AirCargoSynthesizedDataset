@@ -5,7 +5,7 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # your models
-from models import NaiveUnconstrainer, EMUnconstrainer, MARSSEMUnconstrainer
+from models import NaiveUnconstrainer, EMUnconstrainer, MARSSEMUnconstrainer, EMPriceUnconstrainer, MARSSXPriceUnconstrainer
 
 DATA_PATH = "../data/air_cargo_10yr_dataset.csv"
 SAVE_DIR = "./unconstrained_results"
@@ -42,42 +42,68 @@ def process_od_pair(args):
         100000
     )
 
-    sample_df["Naive_Est"] = np.nan
-    sample_df["EM_Est"] = np.nan
-    sample_df["MARSS_Est"] = np.nan
+    sample_df['Naive_Est'] = np.nan
+    sample_df['EM_Est'] = np.nan
+    sample_df['MARSS_Est'] = np.nan
+    sample_df['EMXPrice_Est'] = np.nan
+    sample_df['MARSSXPrice_Est'] = np.nan
 
     obs_arr = sample_df["Final_Constrained_Bookings"].values
     cens_arr = sample_df["Is_Censored"].values
     cap_arr = sample_df["Fuzzy_Capacity"].values
 
     models = {
-        "Naive_Est": NaiveUnconstrainer(),
-        "EM_Est": EMUnconstrainer(),
-        "MARSS_Est": MARSSEMUnconstrainer()
+        'Naive': (NaiveUnconstrainer(), 'Naive_Est'),
+        'EM': (EMUnconstrainer(), 'EM_Est'),
+        'MARSS': (MARSSEMUnconstrainer(), 'MARSS_Est'),
+        'EM-X Price': (EMPriceUnconstrainer(), 'EMXPrice_Est'),
+        'MARSS-X Price': (MARSSXPriceUnconstrainer(), 'MARSSXPrice_Est')
     }
 
+    # Convert columns to numpy arrays for faster slicing
+    # FIX: Extract Price_Index from sample_df, NOT the global df
+    obs_arr = sample_df['Final_Constrained_Bookings'].values
+    cens_arr = sample_df['Is_Censored'].values
+    cap_arr = sample_df['Fuzzy_Capacity'].values
+    price_arr = sample_df['Final_Price_per_kg'].values 
+
     for t in range(LOOKBACK, len(sample_df)):
+            
+        # SLICE THE PAST + TODAY
         win_start = t - LOOKBACK + 1
         win_end = t + 1
-
+        
         win_obs = obs_arr[win_start:win_end]
         win_cens = cens_arr[win_start:win_end]
         win_cap = cap_arr[win_start:win_end]
-
-        for col, model in models.items():
-
+        win_price = price_arr[win_start:win_end] 
+        
+        # Run each model on the isolated window
+        for name, (model, col_name) in models.items():
+            # If today is NOT censored, latent demand is simply the observed bookings.
             if not win_cens[-1]:
-                sample_df.loc[t, col] = win_obs[-1]
+                sample_df.loc[t, col_name] = win_obs[-1]
                 continue
-
-            result = model.fit(
-                observed_bookings=win_obs,
-                is_censored=win_cens,
-                capacity=win_cap,
-                max_iter=50
-            )
-
-            sample_df.loc[t, col] = result[-1]
+                
+            # FIX: Conditionally pass the price_index argument only to models that need it
+            if 'Price' in name:
+                imputed_window = model.fit(
+                    observed_bookings=win_obs,
+                    is_censored=win_cens,
+                    capacity=win_cap,
+                    price_per_kg=win_price,
+                    max_iter=50
+                )
+            else:
+                imputed_window = model.fit(
+                    observed_bookings=win_obs,
+                    is_censored=win_cens,
+                    capacity=win_cap,
+                    max_iter=50
+                )
+            
+            # Save the very last value in the array (Today's estimate)
+            sample_df.loc[t, col_name] = imputed_window[-1]
 
     sample_df.to_parquet(save_path, index=False)
 
