@@ -92,3 +92,24 @@ DOW_MULTIPLIERS = {
 AIRCRAFT_CAPACITY_KG = 100000
 SCHEDULE_DESIGN_LOAD_FACTOR = 1.7
 MAX_SHIPMENT_SIZE_KG = 800
+
+# ==========================================
+# 6. PRICE SYSTEM
+# ==========================================
+
+BASE_PRICE_PER_KG = {
+    ("Asia", "US"): 4.8,
+    ("US", "Asia"): 3.2,
+    ("Asia", "Asia"): 2.6,
+    ("US", "US"): 2.1
+}
+
+PRICE_VOLATILITY = 0.18
+
+SEGMENT_ELASTICITY = {
+    "Contract": 0.15,
+    "General": 1.10,
+    "Perishable": 0.45,
+    "Express": 0.20,
+    "Spot": 1.45
+}
