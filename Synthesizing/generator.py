@@ -107,7 +107,7 @@ def generate_final_dataset(years=10):
     )
 
     print("5. Assigning Fixed Flight Schedules...")
-    peak_demand = df_full.groupby(['Origin', 'Destination'])['Total_Daily_Market_Demand'].transform('max')
+    peak_demand = df_full.groupby(['Origin', 'Destination'])['Total_Daily_Market_Demand'].transform('mean')
     target_capacity = AIRCRAFT_CAPACITY_KG * SCHEDULE_DESIGN_LOAD_FACTOR
     df_full['Scheduled_Flights'] = np.ceil(peak_demand / target_capacity).astype(int)
     df_full['True_Flight_Demand'] = df_full['Total_Daily_Market_Demand'] / df_full['Scheduled_Flights']
