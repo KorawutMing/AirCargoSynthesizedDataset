@@ -90,7 +90,7 @@ DOW_MULTIPLIERS = {
 # 5. FLIGHT SCHEDULING & CAPACITY
 # ==========================================
 AIRCRAFT_CAPACITY_KG = 100000
-SCHEDULE_DESIGN_LOAD_FACTOR = 1
+SCHEDULE_DESIGN_LOAD_FACTOR = 0.8
 MAX_SHIPMENT_SIZE_KG = 800
 
 # ==========================================
