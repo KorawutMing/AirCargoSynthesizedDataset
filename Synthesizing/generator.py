@@ -107,7 +107,7 @@ def generate_final_dataset(years=10):
     )
 
     print("5. Assigning Fixed Flight Schedules...")
-    peak_demand = df_full.groupby(['Origin', 'Destination'])['Total_Daily_Market_Demand'].transform('max')
+    peak_demand = df_full.groupby(['Origin', 'Destination'])['Total_Daily_Market_Demand'].transform('mean')
     target_capacity = AIRCRAFT_CAPACITY_KG * SCHEDULE_DESIGN_LOAD_FACTOR
     df_full['Scheduled_Flights'] = np.ceil(peak_demand / target_capacity).astype(int)
     df_full['True_Flight_Demand'] = df_full['Total_Daily_Market_Demand'] / df_full['Scheduled_Flights']
@@ -123,8 +123,19 @@ def generate_final_dataset(years=10):
     for segment, params in SEGMENTS.items():
         blended_arrivals += df_curves[segment].values * params['weight']
         
-    # Vectorized Outer Product: (Total Flights x 1) * (1 x 15 Days) = Matrix of daily new requests
-    true_daily_arrivals = df_full['True_Flight_Demand'].values.reshape(-1, 1) * blended_arrivals.reshape(1, -1)
+    # 1. Calculate the *Expected* Daily Arrivals 
+    # This acts as the lambda (λ) parameter for our Poisson distribution
+    expected_daily_arrivals = df_full['True_Flight_Demand'].values.reshape(-1, 1) * blended_arrivals.reshape(1, -1)
+    
+    # 2. Inject Stochasticity: Draw actual daily arrivals from a Poisson distribution
+    # This does two things:
+    #   a) It forces arrivals to be discrete integers (you can't book 0.45 of a shipment)
+    #   b) It adds natural variance around the expected curve.
+    
+    # Optional: Set a seed here if you want the "random" arrivals to be exactly reproducible 
+    # across different runs of the generator while you are testing your EM algorithms.
+    np.random.seed(99) 
+    true_daily_arrivals = np.random.poisson(lam=expected_daily_arrivals)
     
     # Cumulative sum to simulate Bookings-on-Hand growing over 15 days
     cum_true_demand = np.cumsum(true_daily_arrivals, axis=1)
