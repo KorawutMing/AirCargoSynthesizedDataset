@@ -67,7 +67,7 @@ BOOKING_WINDOW_DAYS = 15
 # ==========================================
 # 4. TEMPORAL DYNAMICS
 # ==========================================
-YOY_GROWTH_RATE = 1.03
+YOY_GROWTH_RATE = 1.01
 
 MOY_MULTIPLIERS = {
     1: 0.90,  2: 0.75,  3: 0.95,  4: 1.00, 
@@ -112,4 +112,19 @@ SEGMENT_ELASTICITY = {
     "Perishable": 0.45,
     "Express": 0.20,
     "Spot": 1.45
+}
+
+# ==========================================
+# 7. PRICING ESCALATION (Days Prior Dynamics)
+# ==========================================
+# Defines how fares escalate as Days Prior (DP) approaches 0.
+# gamma: max premium multiplier (e.g., 1.5 = 150% markup)
+# theta: how steeply the price rises near DP=0
+# Formula: Price(DP) = BasePrice * (1 + gamma * e^(-theta * DP)) * Noise
+ESCALATION_PARAMS = {
+    "Contract":   {"gamma": 0.0, "theta": 0.0},  # Flat rate
+    "General":    {"gamma": 0.2, "theta": 0.5},  # Slight rise at the very end
+    "Perishable": {"gamma": 0.5, "theta": 0.8},  # Moderate rise
+    "Spot":       {"gamma": 1.0, "theta": 0.3},  # Highly volatile, steady rise
+    "Express":    {"gamma": 2.0, "theta": 1.2}   # Massive exponential spike in last 3 days
 }

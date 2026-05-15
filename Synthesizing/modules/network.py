@@ -23,6 +23,9 @@ def calculate_haversine(lat1, lon1, lat2, lon2):
     
     return R * c
 
+def f(dist_km):
+    return 1
+
 def generate_base_network():
     """
     Calculates total market demand purely based on Export/Import power,
@@ -49,7 +52,7 @@ def generate_base_network():
             M_j = dest_data['M']
             
             # 1. Pure Market Demand (No distance penalty)
-            total_market_demand = GRAVITY_K * (X_i * M_j) * DEMAND_SCALER
+            total_market_demand = GRAVITY_K * (X_i * M_j) * DEMAND_SCALER / f(dist_km)
             
             # 2. Air Cargo Mode Share (Distance as a routing/mode filter)
             if dist_km < 500:
