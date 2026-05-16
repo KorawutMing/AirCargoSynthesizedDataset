@@ -309,6 +309,10 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
         cens = np.asarray(is_censored, dtype=bool)
         p = np.asarray(price_per_kg, dtype=float)
 
+        # Robustness: If all bookings are zero, return zeros
+        if np.all(y == 0) and not np.any(cens):
+            return y
+
         if np.isscalar(capacity):
             cap = np.full(len(y), capacity, dtype=float)
         else:
@@ -316,15 +320,18 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
 
         # ---------- Initial OLS using uncensored ----------
         mask = ~cens
-        if np.sum(mask) < 3:
-            mask = np.ones(len(y), dtype=bool)
+        # Robustness: Ensure we have enough data and variance for OLS
+        if np.sum(mask) < 2 or np.std(p[mask]) < 1e-6:
+            # Fallback to mean if OLS is not possible
+            self.beta0 = np.mean(y)
+            self.beta1 = 0.0
+        else:
+            X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
+            beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
+            self.beta0 = beta[0]
+            self.beta1 = beta[1]
 
-        X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
-        beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
-
-        self.beta0 = beta[0]
-        self.beta1 = beta[1]
-        self.sigma = max(np.std(y[mask]), 1.0)
+        self.sigma = max(np.std(y[mask]) if np.sum(mask) > 1 else 1.0, 1.0)
 
         for i in range(max_iter):
             prev_b0 = self.beta0
@@ -336,26 +343,32 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
             idx = np.where(cens)[0]
 
             if len(idx) > 0:
-                a = (cap[idx] - mu[idx]) / self.sigma
+                # Ensure sigma is not zero to avoid division by zero
+                current_sigma = max(self.sigma, 1e-6)
+                a = (cap[idx] - mu[idx]) / current_sigma
                 a = np.clip(a, -5, 5)
 
                 tail = np.clip(1 - norm.cdf(a), 1e-12, 1.0)
                 lam = norm.pdf(a) / tail
 
                 # Calculate imputation
-                imputed_values = mu[idx] + self.sigma * lam
-                
+                imputed_values = mu[idx] + current_sigma * lam
+
                 # BUG FIX: Circuit breaker to stop runaway OLS feedback loop.
                 # Hard limit the estimation to 2x the flight's capacity
                 max_allowed = cap[idx] * 2.0 
                 y[idx] = np.minimum(imputed_values, max_allowed)
 
             # ---------- M STEP ----------
-            Xall = np.column_stack([np.ones(len(y)), p])
-            beta = np.linalg.lstsq(Xall, y, rcond=None)[0]
-
-            self.beta0 = beta[0]
-            self.beta1 = beta[1]
+            # Robustness: Check for variance in p before full OLS
+            if np.std(p) < 1e-6:
+                self.beta0 = np.mean(y)
+                self.beta1 = 0.0
+            else:
+                Xall = np.column_stack([np.ones(len(y)), p])
+                beta = np.linalg.lstsq(Xall, y, rcond=None)[0]
+                self.beta0 = beta[0]
+                self.beta1 = beta[1]
 
             resid = y - (self.beta0 + self.beta1 * p)
             self.sigma = max(np.std(resid), 1.0)
