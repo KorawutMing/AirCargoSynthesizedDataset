@@ -117,14 +117,12 @@ SEGMENT_ELASTICITY = {
 # ==========================================
 # 7. PRICING ESCALATION (Days Prior Dynamics)
 # ==========================================
-# Defines how fares escalate as Days Prior (DP) approaches 0.
-# gamma: max premium multiplier (e.g., 1.5 = 150% markup)
-# theta: how steeply the price rises near DP=0
-# Formula: Price(DP) = BasePrice * (1 + gamma * e^(-theta * DP)) * Noise
-ESCALATION_PARAMS = {
-    "Contract":   {"gamma": 0.0, "theta": 0.0},  # Flat rate
-    "General":    {"gamma": 0.2, "theta": 0.5},  # Slight rise at the very end
-    "Perishable": {"gamma": 0.5, "theta": 0.8},  # Moderate rise
-    "Spot":       {"gamma": 1.0, "theta": 0.3},  # Highly volatile, steady rise
-    "Express":    {"gamma": 2.0, "theta": 1.2}   # Massive exponential spike in last 3 days
+# base_multiplier: How much more/less this segment pays relative to the flight's base price
+# daily_growth: The constant multiplier applied for each day closer to departure
+PRICING_DYNAMICS = {
+    "Contract":   {"base_multiplier": 0.8, "daily_growth": 1.00}, # Flat rate, no growth
+    "General":    {"base_multiplier": 1.0, "daily_growth": 1.02}, # 2% growth per day
+    "Perishable": {"base_multiplier": 1.1, "daily_growth": 1.03}, # 3% growth per day
+    "Spot":       {"base_multiplier": 1.0, "daily_growth": 1.05}, # 5% growth per day
+    "Express":    {"base_multiplier": 1.2, "daily_growth": 1.07}  # 7% growth per day
 }

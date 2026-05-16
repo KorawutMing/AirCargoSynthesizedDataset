@@ -102,8 +102,13 @@ def generate_final_dataset(years=10):
                 cumulative_weight += sorted_realized[request_idx]['weight']
                 request_idx += 1
             boh_trajectory[f'BOH_DP{dp}'] = round(cumulative_weight, 0)
+
+        price_trajectory = {}
+        for seg in SEGMENTS.keys():
+            for dp in range(15, 0, -1):
+                price_trajectory[f'Price_{seg}_DP{dp}'] = price_matrix[seg][dp]
             
-        # 3. Compile the row (Note: Flight_Sequence is NOT here to avoid merge conflicts)
+        # 3. Compile the row 
         result_row = {
             'Index': row.Index,
             'Final_True_Demand': round(sum(segment_latent.values()), 0),
@@ -116,6 +121,7 @@ def generate_final_dataset(years=10):
         result_row.update(segment_realized)
         result_row.update(segment_latent)
         result_row.update(boh_trajectory)
+        result_row.update(price_trajectory)
         
         simulation_results.append(result_row)
 
@@ -140,8 +146,9 @@ def generate_final_dataset(years=10):
     seg_cols = [f"Observed_{seg}_kg" for seg in SEGMENTS.keys()] + \
                [f"Oracle_{seg}_kg" for seg in SEGMENTS.keys()]
     curve_cols = [f'BOH_DP{dp}' for dp in range(15, 0, -1)]
+    price_cols = [f'Price_{seg}_DP{dp}' for seg in SEGMENTS.keys() for dp in range(15, 0, -1)]
     
-    df_final = df_final[base_cols + seg_cols + curve_cols].copy()
+    df_final = df_final[base_cols + seg_cols + curve_cols + price_cols].copy()
     
     print("Dataset Generation Complete!")
     return df_final
