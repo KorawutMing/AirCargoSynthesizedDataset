@@ -46,16 +46,16 @@ TRADE_LANES = {
 # ==========================================
 SEGMENTS = {
     # Shifts from very early (5.0, 1.5) to a more balanced S-curve
-    "Contract":   {"alpha": 2.0, "beta": 1.5, "weight": 0.35}, 
+    "Contract":   {"alpha": 1.5, "beta": 2.0, "weight": 0.35}, 
     
     # Shifts from centered (3.0, 3.0) to late-leaning (resembles your Agent A)
-    "General":    {"alpha": 1.5, "beta": 2.5, "weight": 0.30}, 
+    "General":    {"alpha": 2.5, "beta": 1.5, "weight": 0.30}, 
     
     # Keeps demand active in the final week
-    "Perishable": {"alpha": 1.0, "beta": 3.0, "weight": 0.10}, 
+    "Perishable": {"alpha": 3.0, "beta": 1.0, "weight": 0.10}, 
     
     # Extreme late spike (resembles your Agent B / "hockey stick")
-    "Express":    {"alpha": 0.5, "beta": 8.0, "weight": 0.15}, 
+    "Express":    {"alpha": 8.0, "beta": 0.5, "weight": 0.15}, 
     
     # Keeps a baseline arrival rate until Day 0
     "Spot":       {"alpha": 1.0, "beta": 1.0, "weight": 0.10}  

@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from config import CITIES, TRADE_LANES, AIRCRAFT_CAPACITY_KG, SCHEDULE_DESIGN_LOAD_FACTOR, SEGMENTS
+from config import CITIES, TRADE_LANES, AIRCRAFT_CAPACITY_KG, SCHEDULE_DESIGN_LOAD_FACTOR, SEGMENTS, BOOKING_WINDOW_DAYS
 from network import generate_base_network
 from temporal import generate_temporal_dynamics
 from booking_curves import generate_booking_curves
@@ -73,6 +73,7 @@ def generate_final_dataset(years=10):
             base_demand=row.True_Flight_Demand,
             temporal_mult=1.0, 
             price_matrix=price_matrix,
+            price_index=row.Price_Index,
             booking_curves=df_curves,
             segments_config=SEGMENTS
         )
@@ -92,12 +93,12 @@ def generate_final_dataset(years=10):
         # 2. Reconstruct the Bookings-on-Hand (BOH) Trajectory
         boh_trajectory = {}
         cumulative_weight = 0
-        sorted_realized = sorted(realized_log, key=lambda x: x['dp'], reverse=True)
+        sorted_realized = sorted(realized_log, key=lambda x: x['dp'])
         
         request_idx = 0
         total_requests = len(sorted_realized)
         
-        for dp in range(15, 0, -1):
+        for dp in range(-BOOKING_WINDOW_DAYS, 0):
             while request_idx < total_requests and sorted_realized[request_idx]['dp'] == dp:
                 cumulative_weight += sorted_realized[request_idx]['weight']
                 request_idx += 1
@@ -105,7 +106,7 @@ def generate_final_dataset(years=10):
 
         price_trajectory = {}
         for seg in SEGMENTS.keys():
-            for dp in range(15, 0, -1):
+            for dp in range(-BOOKING_WINDOW_DAYS, 0):
                 price_trajectory[f'Price_{seg}_DP{dp}'] = price_matrix[seg][dp]
             
         # 3. Compile the row 
@@ -145,8 +146,8 @@ def generate_final_dataset(years=10):
     # Safely generate the dynamic columns directly from the config keys
     seg_cols = [f"Observed_{seg}_kg" for seg in SEGMENTS.keys()] + \
                [f"Oracle_{seg}_kg" for seg in SEGMENTS.keys()]
-    curve_cols = [f'BOH_DP{dp}' for dp in range(15, 0, -1)]
-    price_cols = [f'Price_{seg}_DP{dp}' for seg in SEGMENTS.keys() for dp in range(15, 0, -1)]
+    curve_cols = [f'BOH_DP{dp}' for dp in range(-BOOKING_WINDOW_DAYS, 0)]
+    price_cols = [f'Price_{seg}_DP{dp}' for seg in SEGMENTS.keys() for dp in range(-BOOKING_WINDOW_DAYS, 0)]
     
     df_final = df_final[base_cols + seg_cols + curve_cols + price_cols].copy()
     

@@ -35,8 +35,8 @@ def generate_booking_curves():
     # Build the DataFrame
     df_curves = pd.DataFrame(curves_dict)
     
-    # Add a 'Days_Prior' column counting down from 15 to 1
-    df_curves['Days_Prior'] = list(range(BOOKING_WINDOW_DAYS, 0, -1))
+    # Add a 'Days_Prior' column counting down from -15 to -1
+    df_curves['Days_Prior'] = list(range(-BOOKING_WINDOW_DAYS, 0))
     
     # Set it as the index for clean merging later
     df_curves = df_curves.set_index('Days_Prior')
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     print(df_curves.sum())
     
     # 2. Plot the Cumulative Booking Curves
-    df_cumulative = df_curves.iloc[::-1].cumsum().iloc[::-1] # Reverse, cumsum, reverse back
+    df_cumulative = df_curves.cumsum()
     
     plt.figure(figsize=(12, 7))
     
@@ -64,9 +64,9 @@ if __name__ == "__main__":
         plt.plot(df_cumulative.index, df_cumulative[col], marker='o', linewidth=2, label=col)
         
     plt.title('Cumulative Booking Curves by Segment (15-Day Window)', fontsize=16)
-    plt.xlabel('Days Prior to Departure', fontsize=12)
+    plt.xlabel('Days Prior to Departure (Chronological)', fontsize=12)
     plt.ylabel('Cumulative % of Segment Booked', fontsize=12)
-    plt.xlim(15, 1) # Reverse X-axis to count down to departure
+    plt.xlim(-BOOKING_WINDOW_DAYS, -1) 
     plt.grid(True, alpha=0.4)
     plt.legend()
     plt.tight_layout()

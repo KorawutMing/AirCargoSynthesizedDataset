@@ -1,6 +1,6 @@
 # simulation.py
 import numpy as np
-from config import MAX_SHIPMENT_SIZE_KG
+from config import MAX_SHIPMENT_SIZE_KG, SEGMENT_ELASTICITY
 
 def rm_decision_model(request, flight_state):
     """
@@ -14,8 +14,8 @@ def rm_decision_model(request, flight_state):
     return True, "Accepted"
 
 def simulate_flight_booking_window(flight_id, total_capacity, base_demand, 
-                                   temporal_mult, price_matrix, booking_curves, 
-                                   segments_config):
+                                   temporal_mult, price_matrix, price_index,
+                                   booking_curves, segments_config):
     """
     Simulates the 15-day discrete transaction queue for a single flight.
     """
@@ -29,8 +29,8 @@ def simulate_flight_booking_window(flight_id, total_capacity, base_demand,
     realized_log = [] 
     latent_log = []   
     
-    # Iterate chronologically from DP=15 down to DP=1
-    for dp in sorted(booking_curves.index, reverse=True):
+    # Iterate chronologically from DP=-15 to DP=-1
+    for dp in sorted(booking_curves.index):
         
         daily_requests = []
         
@@ -42,8 +42,11 @@ def simulate_flight_booking_window(flight_id, total_capacity, base_demand,
             arrival_pct = booking_curves.loc[dp, segment]
             price = price_matrix[segment][dp]
             
-            # Simplified elasticity placeholder
-            elasticity_factor = 1.0 
+            # Apply price elasticity relative to the flight's specific Price_Index
+            # Price_Index represents the deviation from 'normal' market price
+            # Factor = (Index)^(-elasticity)
+            elasticity = SEGMENT_ELASTICITY.get(segment, 1.0)
+            elasticity_factor = price_index ** (-elasticity)
             
             # Calculate expected demand in KG
             expected_demand_kg = base_demand * temporal_mult * params['weight'] * arrival_pct * elasticity_factor

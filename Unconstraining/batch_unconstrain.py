@@ -63,7 +63,7 @@ def process_od_pair(args):
 
     for seg in SEGMENTS.keys():
         obs_col = f"Observed_{seg}_kg"
-        price_col = f"Price_{seg}_DP15"
+        price_col = f"Price_{seg}_DP-15"
         
         if obs_col not in sample_df.columns or price_col not in sample_df.columns:
             continue

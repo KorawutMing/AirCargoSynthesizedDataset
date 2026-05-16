@@ -49,9 +49,23 @@ def generate_temporal_dynamics(years=10, start_date='2016-01-01'):
         lane_name = lane_data['name']
         volatility = lane_data['volatility']
         
-        # Draw random noise from a normal distribution centered at 1.0
-        # Clip at 0.4 to prevent mathematically impossible negative demand during massive dips
-        lane_noise = np.random.normal(loc=1.0, scale=volatility, size=len(df_time))
+        # Draw random noise using an AR(1) process to introduce autocorrelation
+        # This allows Kalman filters to track the 'state' of demand better than static models.
+        # x_t = phi * x_{t-1} + (1-phi) * mu + epsilon
+        phi = 0.7 # Persistence factor
+        mu = 1.0
+        
+        lane_noise = np.zeros(len(df_time))
+        lane_noise[0] = mu
+        
+        # Standard deviation of the innovation needed to maintain target volatility
+        # sigma_eps = sigma_target * sqrt(1 - phi^2)
+        innovation_std = volatility * np.sqrt(1 - phi**2)
+        
+        for t in range(1, len(df_time)):
+            epsilon = np.random.normal(0, innovation_std)
+            lane_noise[t] = phi * lane_noise[t-1] + (1 - phi) * mu + epsilon
+            
         lane_noise = np.clip(lane_noise, 0.4, 2.5) 
         
         # The final multiplier for any flight in this lane on this specific day
