@@ -155,8 +155,9 @@ def generate_final_dataset(years=10):
     return df_final
 
 if __name__ == "__main__":
-    df = generate_final_dataset(years=10) 
-    df.to_csv('./data/air_cargo_10yr_dataset.csv', index=False)
+    years = 5
+    df = generate_final_dataset(years=years) 
+    df.to_csv(f'./data/air_cargo_{years}yr_dataset.csv', index=False)
     
     print("\n--- Summary of Generated Dataset ---")
     print(f"Total Flights Simulated: {len(df):,}")

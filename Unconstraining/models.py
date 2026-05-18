@@ -40,6 +40,8 @@ class EMUnconstrainer(BaseUnconstrainer):
         self.sigma = None
 
     def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-5):
+        self.history.clear()
+
         y = observed_bookings.copy().astype(float)
         cens = np.asarray(is_censored, dtype=bool)
         
@@ -96,7 +98,9 @@ class MARSSEMUnconstrainer(BaseUnconstrainer):
         self.mu_0 = None
         self.P0 = None
 
-    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-4):
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-5):
+        self.history.clear()
+
         y = np.asarray(observed_bookings, dtype=float)
         cens = np.asarray(is_censored, dtype=bool)
         T = len(y)
@@ -251,6 +255,8 @@ class MARSSXPriceUnconstrainer(BaseUnconstrainer):
         self.core_model = MARSSEMUnconstrainer()
 
     def fit(self, observed_bookings, is_censored, capacity, price_per_kg, max_iter=100, tol=1e-4):
+        self.history.clear()
+
         y = np.asarray(observed_bookings, dtype=float)
         cens = np.asarray(is_censored, dtype=bool)
         p = np.asarray(price_per_kg, dtype=float)
@@ -305,6 +311,8 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
         self.sigma = None
 
     def fit(self, observed_bookings, is_censored, capacity, price_per_kg, max_iter=100, tol=1e-5):
+        self.history.clear()
+
         y = np.asarray(observed_bookings, dtype=float).copy()
         cens = np.asarray(is_censored, dtype=bool)
         p = np.asarray(price_per_kg, dtype=float)
@@ -354,22 +362,24 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
                 # Calculate imputation
                 imputed_values = mu[idx] + current_sigma * lam
 
-                # BUG FIX: Circuit breaker to stop runaway OLS feedback loop.
-                # Hard limit the estimation to 2x the flight's capacity
-                max_allowed = cap[idx] * 2.0 
-                y[idx] = np.minimum(imputed_values, max_allowed)
+                # The circuit breaker is DELETED. 
+                # Just assign the lifted values directly!
+                y[idx] = imputed_values
 
             # ---------- M STEP ----------
-            # Robustness: Check for variance in p before full OLS
-            if np.std(p) < 1e-6:
-                self.beta0 = np.mean(y)
-                self.beta1 = 0.0
-            else:
-                Xall = np.column_stack([np.ones(len(y)), p])
-                beta = np.linalg.lstsq(Xall, y, rcond=None)[0]
+            # FIX: Only calculate price elasticity using UNCENSORED days. 
+            # This isolates natural market behavior from RM price manipulation.
+            mask = ~cens
+            if np.sum(mask) > 2 and np.std(p[mask]) > 1e-6:
+                X_uncens = np.column_stack([np.ones(np.sum(mask)), p[mask]])
+                beta = np.linalg.lstsq(X_uncens, y[mask], rcond=None)[0]
                 self.beta0 = beta[0]
                 self.beta1 = beta[1]
+            else:
+                self.beta0 = np.mean(y)
+                self.beta1 = 0.0
 
+            # The variance (sigma) can still be calculated on the whole dataset
             resid = y - (self.beta0 + self.beta1 * p)
             self.sigma = max(np.std(resid), 1.0)
 
@@ -381,7 +391,6 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
             })
 
             diff = abs(self.beta0 - prev_b0) + abs(self.beta1 - prev_b1)
-
             if diff < tol:
                 break
 
