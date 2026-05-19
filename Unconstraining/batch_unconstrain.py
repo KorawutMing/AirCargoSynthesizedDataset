@@ -149,7 +149,7 @@ if __name__ == "__main__":
     tasks = [(origin, dest, group.copy()) for (origin, dest), group in df.groupby(["Origin", "Destination"])]
     del df # Free original DataFrame memory
 
-    workers = max(1, os.cpu_count() - 1)
+    workers = max(1, os.cpu_count() - 4)
     print(f"Starting batch processing with {workers} workers for {len(tasks)} OD pairs...")
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
