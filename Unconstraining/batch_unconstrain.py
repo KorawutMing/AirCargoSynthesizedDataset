@@ -140,11 +140,17 @@ def process_od_pair(args):
                     fallback_val = np.mean(win_obs[mask_uncens]) if np.sum(mask_uncens) > 0 else np.mean(win_obs)
                     results_cache[seg][col_prefix][t] = max(obs_arr[t], fallback_val)
 
-    # Batch assign the filled NumPy arrays back to the DataFrame
+    # 1. Collect all the new arrays into a standard dictionary first
+    new_columns = {}
     for seg, models_dict in results_cache.items():
         for col_prefix, arr in models_dict.items():
             if not np.all(np.isnan(arr)):
-                sample_df[f"{col_prefix}_{seg}_Est"] = arr
+                new_columns[f"{col_prefix}_{seg}_Est"] = arr
+    
+    # 2. Convert the dictionary to a single DataFrame and concatenate it all at once
+    if new_columns:
+        new_cols_df = pd.DataFrame(new_columns, index=sample_df.index)
+        sample_df = pd.concat([sample_df, new_cols_df], axis=1)
 
     sample_df.to_parquet(save_path, index=False)
     return f"Done {origin}->{dest}"
