@@ -155,7 +155,7 @@ def generate_final_dataset(years=10):
     return df_final
 
 if __name__ == "__main__":
-    years = 5
+    years = 10
     df = generate_final_dataset(years=years) 
     df.to_csv(f'./data/air_cargo_{years}yr_dataset.csv', index=False)
     

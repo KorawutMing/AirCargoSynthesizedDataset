@@ -23,7 +23,7 @@ from models import (
     PDPriceUnconstrainer
 )
 
-DATA_PATH = "../data/air_cargo_5yr_dataset.csv"
+DATA_PATH = "../data/air_cargo_10yr_dataset.csv"
 SAVE_DIR = "./unconstrained_results"
 LOOKBACK = 365
 
