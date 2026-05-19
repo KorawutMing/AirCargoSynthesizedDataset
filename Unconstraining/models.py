@@ -9,7 +9,7 @@ class BaseUnconstrainer(ABC):
         self.history = []
 
     @abstractmethod
-    def fit(self, observed_bookings, is_censored, capacity):
+    def fit(self, observed_bookings, is_censored, capacity, **kwargs):
         pass
 
     def evaluate(self, true_demand, estimated_demand):
@@ -61,6 +61,7 @@ class EMUnconstrainer(BaseUnconstrainer):
         
         for i in range(max_iter):
             prev_mu = self.mu
+            prev_sigma = self.sigma
             
             # --- E-STEP: Estimate latent demand for censored flights ---
             # Using the property of the Truncated Normal distribution
@@ -79,226 +80,11 @@ class EMUnconstrainer(BaseUnconstrainer):
             
             self.history.append({'iter': i, 'mu': self.mu, 'sigma': self.sigma})
             
-            if abs(self.mu - prev_mu) < tol:
+            diff = abs(self.mu - prev_mu) + abs(self.sigma - prev_sigma)
+            if diff < tol:
                 break
                 
         return y
-
-
-class MARSSEMUnconstrainer(BaseUnconstrainer):
-    """
-    EM for 1D MARSS / Local Level State-Space model with censoring.
-    """
-    def __init__(self):
-        super().__init__()
-        self.B = None
-        self.Z = None
-        self.Q = None
-        self.R = None
-        self.mu_0 = None
-        self.P0 = None
-
-    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, max_iter=100, tol=1e-5):
-        self.history.clear()
-
-        y = np.asarray(observed_bookings, dtype=float)
-        cens = np.asarray(is_censored, dtype=bool)
-        T = len(y)
-
-        var_y = max(np.var(y), 1.0)
-
-        self.B = 1.0
-        self.Z = 1.0
-        self.Q = var_y * 0.10
-        self.R = var_y * 0.25
-        self.mu_0 = y[0]
-        self.P0 = var_y
-
-        loglik_prev = -np.inf
-
-        for iteration in range(max_iter):
-            x_pred = np.zeros(T)
-            P_pred = np.zeros(T)
-            x_filt = np.zeros(T)
-            P_filt = np.zeros(T)
-            expected_y = np.zeros(T)
-            expected_yy = np.zeros(T)
-            loglik = 0.0
-
-            # ---------- Forward Kalman Filter ----------
-            for t in range(T):
-                if t == 0:
-                    x_prior = self.B * self.mu_0
-                    P_prior = self.B**2 * self.P0 + self.Q
-                else:
-                    x_prior = self.B * x_filt[t - 1]
-                    P_prior = self.B**2 * P_filt[t - 1] + self.Q
-
-                x_pred[t] = x_prior
-                P_pred[t] = P_prior
-
-                mu_y = self.Z * x_prior
-                S = self.Z**2 * P_prior + self.R
-                S = max(S, 1e-8)
-
-                if not cens[t]:
-                    obs = y[t]
-                    K = P_prior * self.Z / S
-                    x_post = x_prior + K * (obs - mu_y)
-                    P_post = (1 - K * self.Z) * P_prior
-                    expected_y[t] = obs
-                    expected_yy[t] = obs**2
-                    loglik += norm.logpdf(obs, loc=mu_y, scale=np.sqrt(S))
-
-                else:
-                    cap_t = capacity[t] if isinstance(capacity, np.ndarray) else capacity
-                    a = (cap_t - mu_y) / np.sqrt(S)
-                    a = np.clip(a, -5.0, 5.0) 
-
-                    tail = max(1 - norm.cdf(a), 1e-12)
-                    lam = norm.pdf(a) / tail
-
-                    Ey = mu_y + np.sqrt(S) * lam
-                    Vy = S * (1 + a * lam - lam**2)
-
-                    K = P_prior * self.Z / S
-                    x_post = x_prior + K * (Ey - mu_y)
-                    P_post = (1 - K * self.Z) * P_prior
-
-                    expected_y[t] = Ey
-                    expected_yy[t] = Vy + Ey**2
-                    loglik += np.log(tail)
-
-                x_filt[t] = x_post
-                P_filt[t] = max(P_post, 1e-8)
-
-            # ---------- RTS Smoother ----------
-            x_smooth = np.zeros(T)
-            P_smooth = np.zeros(T)
-            P_lag = np.zeros(T)
-
-            x_smooth[-1] = x_filt[-1]
-            P_smooth[-1] = P_filt[-1]
-
-            for t in range(T - 2, -1, -1):
-                J = P_filt[t] * self.B / max(P_pred[t + 1], 1e-8)
-                x_smooth[t] = x_filt[t] + J * (x_smooth[t + 1] - x_pred[t + 1])
-                P_smooth[t] = P_filt[t] + J**2 * (P_smooth[t + 1] - P_pred[t + 1])
-                P_lag[t + 1] = J * P_smooth[t + 1]
-
-            Ex = x_smooth
-            Exx = P_smooth + x_smooth**2
-            Exx_lag = np.zeros(T)
-            for t in range(1, T):
-                Exx_lag[t] = P_lag[t] + x_smooth[t] * x_smooth[t - 1]
-
-            # ---------- M-STEP ----------
-            self.B = 1.0
-
-            q_sum = 0.0
-            for t in range(1, T):
-                q_sum += (Exx[t] - 2 * self.B * Exx_lag[t] + self.B**2 * Exx[t - 1])
-            self.Q = max(q_sum / (T - 1), var_y * 0.01)
-
-            r_sum = 0.0
-            for t in range(T):
-                r_sum += (expected_yy[t] - 2 * self.Z * expected_y[t] * Ex[t] + self.Z**2 * Exx[t])
-            self.R = max(r_sum / T, 1e-8)
-
-            self.mu_0 = Ex[0]
-            self.P0 = max(P_smooth[0], 1e-8)
-
-            self.history.append({"iter": iteration + 1, "B": self.B, "Q": self.Q, "R": self.R, "loglik": loglik})
-
-            if abs(loglik - loglik_prev) < tol:
-                break
-            loglik_prev = loglik
-
-        # ---------- FINAL IMPUTATION ----------
-        final_imputed = y.copy()
-        
-        for t in range(T):
-            if cens[t]:
-                mu_s = self.Z * x_smooth[t]
-                S_s = (self.Z**2 * P_smooth[t]) + self.R
-                
-                # BUG FIX: Extract scalar capacity here as well
-                cap_t = capacity[t] if isinstance(capacity, np.ndarray) else capacity
-                
-                a = (cap_t - mu_s) / np.sqrt(S_s)
-                a = np.clip(a, -5.0, 5.0)
-                
-                tail = max(1 - norm.cdf(a), 1e-12)
-                lam = norm.pdf(a) / tail
-                
-                final_imputed[t] = mu_s + np.sqrt(S_s) * lam
-
-        return final_imputed
-    
-
-# ==========================================================
-# PRICE-AWARE UNCONSTRAINERS
-# Add below your existing classes in unconstrainers.py
-# ==========================================================
-
-import numpy as np
-from scipy.stats import norm
-
-class MARSSXPriceUnconstrainer(BaseUnconstrainer):
-    """
-    Practical price-aware dynamic model.
-    """
-    def __init__(self):
-        super().__init__()
-        self.beta0 = None
-        self.beta1 = None
-        self.core_model = MARSSEMUnconstrainer()
-
-    def fit(self, observed_bookings, is_censored, capacity, price_per_kg, max_iter=100, tol=1e-4):
-        self.history.clear()
-
-        y = np.asarray(observed_bookings, dtype=float)
-        cens = np.asarray(is_censored, dtype=bool)
-        p = np.asarray(price_per_kg, dtype=float)
-
-        # Handle scalar capacity
-        if np.isscalar(capacity):
-            cap_arr = np.full(len(y), capacity, dtype=float)
-        else:
-            cap_arr = np.asarray(capacity, dtype=float)
-
-        # ---------- Estimate price relationship ----------
-        mask = ~cens
-        if np.sum(mask) < 3:
-            mask = np.ones(len(y), dtype=bool)
-
-        X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
-        beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
-
-        self.beta0 = beta[0]
-        self.beta1 = beta[1]
-
-        price_component = self.beta0 + self.beta1 * p
-
-        # Residual demand
-        residual = y - price_component
-        
-        # BUG FIX: Convert capacity to residual space
-        residual_capacity = cap_arr - price_component
-
-        # Run MARSS on residual
-        residual_est = self.core_model.fit(
-            observed_bookings=residual,
-            is_censored=cens,
-            capacity=residual_capacity,  # <-- Pass the adjusted capacity here
-            max_iter=max_iter,
-            tol=tol
-        )
-
-        final_est = residual_est + price_component
-
-        return final_est
-
 
 class EMPriceUnconstrainer(BaseUnconstrainer):
     """
@@ -344,6 +130,7 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
         for i in range(max_iter):
             prev_b0 = self.beta0
             prev_b1 = self.beta1
+            prev_sigma = self.sigma
 
             mu = self.beta0 + self.beta1 * p
 
@@ -367,12 +154,10 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
                 y[idx] = imputed_values
 
             # ---------- M STEP ----------
-            # FIX: Only calculate price elasticity using UNCENSORED days. 
-            # This isolates natural market behavior from RM price manipulation.
-            mask = ~cens
-            if np.sum(mask) > 2 and np.std(p[mask]) > 1e-6:
-                X_uncens = np.column_stack([np.ones(np.sum(mask)), p[mask]])
-                beta = np.linalg.lstsq(X_uncens, y[mask], rcond=None)[0]
+            # Use the COMPLETE dataset (uncensored + imputed) to update parameters
+            if len(y) > 2 and np.std(p) > 1e-6:
+                X_all = np.column_stack([np.ones(len(y)), p])
+                beta = np.linalg.lstsq(X_all, y, rcond=None)[0]
                 self.beta0 = beta[0]
                 self.beta1 = beta[1]
             else:
@@ -390,7 +175,174 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
                 "sigma": self.sigma
             })
 
-            diff = abs(self.beta0 - prev_b0) + abs(self.beta1 - prev_b1)
+            diff = abs(self.beta0 - prev_b0) + abs(self.beta1 - prev_b1) + abs(self.sigma - prev_sigma)
+            if diff < tol:
+                break
+
+        return y
+    
+# ==========================================================
+# PROJECTION-DETRUNCATION (PD) UNCONSTRAINERS
+# ==========================================================
+
+class PDUnconstrainer(BaseUnconstrainer):
+    """
+    Projection-Detruncation (PD) Algorithm for Truncated Normal Distribution.
+    Replaces censored observations with a fixed fractile (controlled by tau)
+    of the conditional tail distribution, rather than the expected value.
+    """
+    def __init__(self):
+        super().__init__()
+        self.mu = None
+        self.sigma = None
+
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg=None, tau=0.5, max_iter=100, tol=1e-5):
+        self.history.clear()
+
+        y = np.asarray(observed_bookings, dtype=float).copy()
+        cens = np.asarray(is_censored, dtype=bool)
+
+        if np.isscalar(capacity):
+            cap = np.full(len(y), capacity, dtype=float)
+        else:
+            cap = np.asarray(capacity, dtype=float)
+
+        # Step 0: Initialization using uncensored data
+        mask = ~cens
+        if np.sum(mask) > 0:
+            self.mu = np.mean(y[mask])
+            self.sigma = max(np.std(y[mask]), 1.0)
+        else:
+            self.mu = np.mean(y)
+            self.sigma = max(np.std(y), 1.0)
+
+        for i in range(max_iter):
+            prev_mu = self.mu
+            prev_sigma = self.sigma
+
+            # --- Step 1: E-STEP (Projection) ---
+            idx = np.where(cens)[0]
+            if len(idx) > 0:
+                current_sigma = max(self.sigma, 1e-6)
+                
+                # Standardize the booking limit
+                a = (cap[idx] - self.mu) / current_sigma
+                a = np.clip(a, -5.0, 5.0) 
+                
+                # Calculate P(Z > b_i)
+                tail_prob = np.clip(1.0 - norm.cdf(a), 1e-12, 1.0)
+                
+                # Target probability for the substituted value: tau * P(Z > b_i)
+                # Translated to CDF space: 1 - (tau * P(Z > b_i))
+                target_cdf = np.clip(1.0 - (tau * tail_prob), 0.0, 1.0 - 1e-12)
+                
+                # Find the standardized Z value at this fractile using inverse CDF (ppf)
+                z_hat_std = norm.ppf(target_cdf)
+                
+                # Unstandardize back to the booking scale and substitute
+                y[idx] = self.mu + current_sigma * z_hat_std
+
+            # --- Step 2: M-STEP (Detruncation) ---
+            # Recalculate parameters using the combined (substituted + unconstrained) dataset
+            self.mu = np.mean(y)
+            self.sigma = max(np.std(y), 1.0)
+
+            self.history.append({'iter': i + 1, 'mu': self.mu, 'sigma': self.sigma})
+
+            # --- Step 3: Convergence Test ---
+            diff = abs(self.mu - prev_mu) + abs(self.sigma - prev_sigma)
+            if diff < tol:
+                break
+
+        return y
+
+
+class PDPriceUnconstrainer(BaseUnconstrainer):
+    """
+    Projection-Detruncation (PD) method with price-dependent mean.
+    """
+    def __init__(self):
+        super().__init__()
+        self.beta0 = None
+        self.beta1 = None
+        self.sigma = None
+
+    def fit(self, observed_bookings, is_censored, capacity, price_per_kg, tau=0.5, max_iter=100, tol=1e-5):
+        self.history.clear()
+
+        y = np.asarray(observed_bookings, dtype=float).copy()
+        cens = np.asarray(is_censored, dtype=bool)
+        p = np.asarray(price_per_kg, dtype=float)
+
+        if np.all(y == 0) and not np.any(cens):
+            return y
+
+        if np.isscalar(capacity):
+            cap = np.full(len(y), capacity, dtype=float)
+        else:
+            cap = np.asarray(capacity, dtype=float)
+
+        # --- Step 0: Initialization ---
+        mask = ~cens
+        if np.sum(mask) < 2 or np.std(p[mask]) < 1e-6:
+            self.beta0 = np.mean(y)
+            self.beta1 = 0.0
+        else:
+            X = np.column_stack([np.ones(np.sum(mask)), p[mask]])
+            beta = np.linalg.lstsq(X, y[mask], rcond=None)[0]
+            self.beta0 = beta[0]
+            self.beta1 = beta[1]
+
+        self.sigma = max(np.std(y[mask]) if np.sum(mask) > 1 else 1.0, 1.0)
+
+        for i in range(max_iter):
+            prev_b0 = self.beta0
+            prev_b1 = self.beta1
+            prev_sigma = self.sigma
+
+            # Calculate the current conditional mean for all observations
+            mu = self.beta0 + self.beta1 * p
+
+            # --- Step 1: E-STEP (Projection) ---
+            idx = np.where(cens)[0]
+            if len(idx) > 0:
+                current_sigma = max(self.sigma, 1e-6)
+                
+                # Standardize using the conditional mean for each specific observation
+                a = (cap[idx] - mu[idx]) / current_sigma
+                a = np.clip(a, -5.0, 5.0)
+
+                tail_prob = np.clip(1.0 - norm.cdf(a), 1e-12, 1.0)
+                target_cdf = np.clip(1.0 - (tau * tail_prob), 0.0, 1.0 - 1e-12)
+                z_hat_std = norm.ppf(target_cdf)
+
+                # Unstandardize using conditional mean and substitute
+                y[idx] = mu[idx] + current_sigma * z_hat_std
+
+            # ---------- M STEP ----------
+            # Use the COMPLETE dataset (uncensored + imputed) to update parameters
+            if len(y) > 2 and np.std(p) > 1e-6:
+                X_all = np.column_stack([np.ones(len(y)), p])
+                beta = np.linalg.lstsq(X_all, y, rcond=None)[0]
+                self.beta0 = beta[0]
+                self.beta1 = beta[1]
+            else:
+                self.beta0 = np.mean(y)
+                self.beta1 = 0.0
+
+            # Variance is computed on the entire dataset (including PD substitutions)
+            resid = y - (self.beta0 + self.beta1 * p)
+            self.sigma = max(np.std(resid), 1.0)
+
+            self.history.append({
+                "iter": i + 1,
+                "beta0": self.beta0,
+                "beta1": self.beta1,
+                "sigma": self.sigma
+            })
+
+            # --- Step 3: Convergence Test ---
+            diff = abs(self.beta0 - prev_b0) + abs(self.beta1 - prev_b1) + abs(self.sigma - prev_sigma)
             if diff < tol:
                 break
 
