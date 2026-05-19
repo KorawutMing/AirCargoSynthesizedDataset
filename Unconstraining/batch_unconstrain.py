@@ -14,7 +14,14 @@ except ImportError:
         "Contract": {}, "General": {}, "Perishable": {}, "Express": {}, "Spot": {}
     }
 
-from models import NaiveUnconstrainer, EMUnconstrainer, MARSSEMUnconstrainer, EMPriceUnconstrainer, MARSSXPriceUnconstrainer
+# Import all unconstrainer models
+from models import (
+    NaiveUnconstrainer, 
+    EMUnconstrainer, 
+    EMPriceUnconstrainer, 
+    PDUnconstrainer, 
+    PDPriceUnconstrainer
+)
 
 DATA_PATH = "../data/air_cargo_5yr_dataset.csv"
 SAVE_DIR = "./unconstrained_results"
@@ -22,14 +29,19 @@ LOOKBACK = 365
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# DRY Configuration: Single source of truth for model classes and their column prefixes
+# DRY Configuration: Now structured as (Class, Prefix, kwargs)
 MODEL_SPECS = {
-    'Naive': (NaiveUnconstrainer, 'Naive'),
-    'EM': (EMUnconstrainer, 'EM'),
-    'MARSS': (MARSSEMUnconstrainer, 'MARSS'),
-    'EM-X Price': (EMPriceUnconstrainer, 'EMXPrice'),
-    'MARSS-X Price': (MARSSXPriceUnconstrainer, 'MARSSXPrice')
+    'Naive': (NaiveUnconstrainer, 'Naive', {}),
+    'EM': (EMUnconstrainer, 'EM', {}),
+    'EM-X Price': (EMPriceUnconstrainer, 'EMXPrice', {})
 }
+
+# Dynamically add PD and PD-Price models for each tau
+for tau in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+    tau_str = str(tau).replace('.', '') # Converts 0.3 -> '03' for column naming
+    MODEL_SPECS[f'PD_{tau}'] = (PDUnconstrainer, f'PD{tau_str}', {'tau': tau})
+    MODEL_SPECS[f'PD-X Price_{tau}'] = (PDPriceUnconstrainer, f'PDXPrice{tau_str}', {'tau': tau})
+
 
 def process_od_pair(args):
     origin, dest, sample_df = args
@@ -61,7 +73,8 @@ def process_od_pair(args):
     # Pre-allocate dictionary of NumPy arrays for O(1) assignments
     results_cache = {}
     for seg in SEGMENTS.keys():
-        results_cache[seg] = {prefix: np.full(len(sample_df), np.nan) for _, prefix in MODEL_SPECS.values()}
+        # Unpack the 3-element tuple
+        results_cache[seg] = {prefix: np.full(len(sample_df), np.nan) for _, prefix, _ in MODEL_SPECS.values()}
 
     for seg in SEGMENTS.keys():
         obs_col = f"Observed_{seg}_kg"
@@ -83,13 +96,13 @@ def process_od_pair(args):
 
         # Instantiate fresh models for this specific segment to prevent cross-contamination
         active_models = {
-            name: (ModelClass(), prefix) 
-            for name, (ModelClass, prefix) in MODEL_SPECS.items()
+            name: (ModelClass(), prefix, kwargs) 
+            for name, (ModelClass, prefix, kwargs) in MODEL_SPECS.items()
         }
 
         for t in range(LOOKBACK, len(sample_df)):
             if not cens_arr[t]:
-                for _, (_, col_prefix) in active_models.items():
+                for _, (_, col_prefix, _) in active_models.items():
                     results_cache[seg][col_prefix][t] = obs_arr[t]
                 continue
 
@@ -102,24 +115,25 @@ def process_od_pair(args):
             win_cap = cap_arr[win_start:win_end]
             win_price = price_arr[win_start:win_end] 
             
-            for name, (model, col_prefix) in active_models.items():
+            for name, (model, col_prefix, model_kwargs) in active_models.items():
                 try:
+                    # Dynamically build kwargs for the fit method
+                    fit_kwargs = {
+                        'observed_bookings': win_obs,
+                        'is_censored': win_cens,
+                        'capacity': win_cap,
+                        'max_iter': 50
+                    }
+                    
                     if 'Price' in name:
-                        imputed_window = model.fit(
-                            observed_bookings=win_obs,
-                            is_censored=win_cens,
-                            capacity=win_cap,
-                            price_per_kg=win_price,
-                            max_iter=50
-                        )
-                    else:
-                        imputed_window = model.fit(
-                            observed_bookings=win_obs,
-                            is_censored=win_cens,
-                            capacity=win_cap,
-                            max_iter=50
-                        )
+                        fit_kwargs['price_per_kg'] = win_price
+                        
+                    # Inject model-specific configurations (like tau)
+                    fit_kwargs.update(model_kwargs)
+
+                    imputed_window = model.fit(**fit_kwargs)
                     results_cache[seg][col_prefix][t] = imputed_window[-1]
+                    
                 except Exception as e:
                     # Smart Fallback: Use historical mean instead of hard zero to protect WAPE/RMSE
                     mask_uncens = ~win_cens
