@@ -1,4 +1,6 @@
 # Forecasting package initialization
-from .base_models import NaiveForecaster, SMAForecaster, YoloForecaster
-from .transformer_forecaster import TransformerForecaster
-from .run_experiments import ForecastingExperiment
+from .base import BaseForecaster
+from .models.baseline import NaiveForecaster, SMAForecaster, WeightedPersistenceForecaster
+from .models.statistical import ARIMAForecaster, SARIMAForecaster
+from .models.transformer import TransformerForecaster
+from .experiment import ForecastingExperiment
