@@ -39,30 +39,72 @@ def evaluate_task(args):
                 "Segment": segment_name,
                 "Model": name,
                 "Fold": fold_idx,
-                "Horizon": horizon
+                "Horizon": horizon,
+                "Predictions": y_pred.tolist(),
+                "Actuals": y_test[:horizon].tolist()
             })
-            results.append(metrics)
-        except Exception:
+            results.append(metrics)        except Exception:
             pass
     return results
 
 class ForecastingExperiment:
-    def __init__(self, data_path, segments=None):
+    def __init__(self, data_path, segments=None, use_unconstrained=False, unconstrained_dir=None):
         self.data_path = data_path
         self.segments = segments or ["Contract", "General", "Perishable", "Express", "Spot"]
+        self.use_unconstrained = use_unconstrained
+        self.unconstrained_dir = unconstrained_dir
         self._df = None
 
     def load_data(self):
+        """
+        Loads the main dataset. If use_unconstrained is True, it merges
+        unconstrained estimates from parquet files.
+        """
         if self._df is None:
+            print(f"Loading base dataset: {self.data_path}")
             self._df = pd.read_csv(self.data_path)
             self._df["Date"] = pd.to_datetime(self._df["Date"])
+            
+            if self.use_unconstrained and self.unconstrained_dir:
+                print(f"Enriching with unconstrained data from {self.unconstrained_dir}...")
+                # Note: For simplicity in the thesis, we use EM_Est as the primary unconstrained target
+                # A more complex version would allow selecting the model
+                all_uncon = []
+                for file in os.listdir(self.unconstrained_dir):
+                    if file.endswith(".parquet"):
+                        uncon_df = pd.read_parquet(os.path.join(self.unconstrained_dir, file))
+                        # The FS grouping is already in the file name/data
+                        all_uncon.append(uncon_df)
+                
+                if all_uncon:
+                    uncon_combined = pd.concat(all_uncon, axis=0)
+                    uncon_combined["Date"] = pd.to_datetime(uncon_combined["Date"])
+                    # Merge based on keys
+                    self._df = pd.merge(
+                        self._df, 
+                        uncon_combined, 
+                        on=["Date", "Origin", "Destination", "Flight_Sequence"],
+                        how="left",
+                        suffixes=("", "_Uncon")
+                    )
         return self._df
 
-    def get_route_data(self, origin, destination):
+    def get_route_data(self, origin, destination, flight_seq=None):
         df = self.load_data()
-        route_df = df[(df["Origin"] == origin) & (df["Destination"] == destination)]
-        oracle_cols = [f"Oracle_{s}_kg" for s in self.segments]
-        return route_df.groupby("Date")[oracle_cols].sum()
+        mask = (df["Origin"] == origin) & (df["Destination"] == destination)
+        if flight_seq is not None:
+            mask &= (df["Flight_Sequence"] == flight_seq)
+        
+        route_df = df[mask]
+        
+        # Decide which columns to use as the "Ground Truth" for training
+        if self.use_unconstrained:
+            # Dynamically find the Est columns (using EM as default for thesis robustness)
+            target_cols = [f"EM_{s}_Est" for s in self.segments if f"EM_{s}_Est" in route_df.columns]
+        else:
+            target_cols = [f"Oracle_{s}_kg" for s in self.segments]
+            
+        return route_df.groupby("Date")[target_cols].sum()
 
     def generate_report(self, df_results):
         """
