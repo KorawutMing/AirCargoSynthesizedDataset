@@ -44,12 +44,12 @@ for tau in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
 
 
 def process_od_pair(args):
-    origin, dest, sample_df = args
-    file_name = f"{origin}_{dest}.parquet"
+    origin, dest, flight_seq, sample_df = args
+    file_name = f"{origin}_{dest}_FS{flight_seq}.parquet"
     save_path = os.path.join(SAVE_DIR, file_name)
 
     if os.path.exists(save_path):
-        return f"Skipped {origin}->{dest}"
+        return f"Skipped {origin}->{dest} (FS:{flight_seq})"
 
     sample_df = sample_df.sort_values("Date").reset_index(drop=True)
 
@@ -166,11 +166,14 @@ if __name__ == "__main__":
 
     print("Generating tasks...")
     # GroupBy is exceptionally faster and memory efficient
-    tasks = [(origin, dest, group.copy()) for (origin, dest), group in df.groupby(["Origin", "Destination"])]
+    tasks = [
+        (origin, dest, flight_seq, group.copy()) 
+        for (origin, dest, flight_seq), group in df.groupby(["Origin", "Destination", "Flight_Sequence"])
+    ]
     del df # Free original DataFrame memory
 
     workers = max(1, os.cpu_count() - 4)
-    print(f"Starting batch processing with {workers} workers for {len(tasks)} OD pairs...")
+    print(f"Starting batch processing with {workers} workers for {len(tasks)} flight-level series...")
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process_od_pair, task) for task in tasks]
