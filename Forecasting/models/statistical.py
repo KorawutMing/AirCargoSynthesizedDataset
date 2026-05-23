@@ -1,7 +1,7 @@
 import numpy as np
 import warnings
 from statsmodels.tsa.arima.model import ARIMA
-from ..base import BaseForecaster
+from .base import BaseForecaster
 
 warnings.filterwarnings("ignore")
 

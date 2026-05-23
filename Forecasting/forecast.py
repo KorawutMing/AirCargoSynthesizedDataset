@@ -106,7 +106,7 @@ class ForecastingExperiment:
         return route_df.groupby("Date")[target_cols].sum()
 
     def generate_report(self, df_results):
-        report_path = os.path.join(os.path.dirname(__file__), "REPORT.md")
+        report_path = os.path.join(os.path.dirname(__file__), "results", "REPORT.md")
         with open(report_path, "w") as f:
             f.write("# Forecasting Performance Report\n\n")
             f.write("## 1. Global Summary\n")
@@ -174,7 +174,7 @@ class ForecastingExperiment:
                     ))
 
         # 2. CHECK FOR CHECKPOINT
-        checkpoint_path = "Forecasting/harvest_checkpoint.json"
+        checkpoint_path = "Forecasting/results/harvest_checkpoint.json"
         existing_results = []
         finished_ids = set()
         if os.path.exists(checkpoint_path):
@@ -217,7 +217,7 @@ class ForecastingExperiment:
         df_results = pd.DataFrame(all_results)
         if not df_results.empty:
             self.generate_report(df_results)
-            df_results.to_json("Forecasting/harvested_predictions.json", orient="records")
+            df_results.to_json("Forecasting/results/harvested_predictions.json", orient="records")
             if os.path.exists(checkpoint_path):
                 os.remove(checkpoint_path)
             print("Final harvest complete. Checkpoint cleared.")

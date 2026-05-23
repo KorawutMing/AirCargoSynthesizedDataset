@@ -5,11 +5,11 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-from Forecasting.residual.data_manager import ResidualDataManager
-from Forecasting.residual.model import GlobalResidualPredictor
+from data_manager import ResidualDataManager
+from model import GlobalResidualPredictor
 import json
 
-def train_refiner(model_name, horizon, harvested_path="Forecasting/harvested_predictions.json"):
+def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harvested_predictions.json"):
     dm = ResidualDataManager(harvested_path)
     X_raw, Y_raw, M_raw, E_raw, dates = dm.get_matrices(model_name, horizon)
     if len(X_raw) < 20: return None
@@ -48,6 +48,12 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/harvested_pre
             (loss + 1e-4 * sum(p.abs().sum() for p in model.parameters())).backward()
             optimizer.step()
 
+    # Save model weights
+    import os
+    weights_dir = "ResidualNet/results/weights"
+    os.makedirs(weights_dir, exist_ok=True)
+    torch.save(model.state_dict(), f"{weights_dir}/{model_name}_H{horizon}.pt")
+
     model.eval()
     with torch.no_grad():
         ref_R_img = model(torch.FloatTensor(te_X_img), None, torch.FloatTensor(te_E_sc)).numpy()
@@ -71,7 +77,7 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/harvested_pre
     }
 
 if __name__ == "__main__":
-    with open("Forecasting/harvested_predictions.json", 'r') as f:
+    with open("Forecasting/results/harvested_predictions.json", 'r') as f:
         harvested = json.load(f)
     models = sorted(list(set(r["Model"] for r in harvested)))
     horizons = [1, 7, 30]
@@ -84,6 +90,6 @@ if __name__ == "__main__":
             res = train_refiner(m, h)
             if res: results[m][str(h)] = res
 
-    with open("Forecasting/spatial_refinement_results.json", "w") as f:
+    with open("ResidualNet/results/spatial_refinement_results.json", "w") as f:
         json.dump(results, f, indent=4)
-    print("\nGlobal results saved to Forecasting/spatial_refinement_results.json")
+    print("\nGlobal results saved to ResidualNet/results/spatial_refinement_results.json")

@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
-from ..base import BaseForecaster
+from .base import BaseForecaster
 from ..utils.data import TimeSeriesDataset
 
 class PositionalEncoding(nn.Module):

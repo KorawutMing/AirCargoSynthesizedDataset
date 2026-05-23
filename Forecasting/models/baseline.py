@@ -1,5 +1,5 @@
 import numpy as np
-from ..base import BaseForecaster
+from .base import BaseForecaster
 
 class NaiveForecaster(BaseForecaster):
     """
