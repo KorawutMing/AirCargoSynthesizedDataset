@@ -1,101 +1,91 @@
-import os
-import pandas as pd
 import numpy as np
-import torch
+import pandas as pd
 import json
+from collections import defaultdict
 
 class ResidualDataManager:
-    """
-    Manages the data pipeline for the Global Residual Predictor.
-    """
-    def __init__(self, unconstrained_dir, base_data_path):
-        self.unconstrained_dir = unconstrained_dir
-        self.base_data_path = base_data_path
-        self.registry = []
-        self._build_registry()
-
-    def _build_registry(self):
-        """Identifies all available flight sequences."""
-        # Use the base dataset to build a comprehensive registry
-        df = pd.read_csv(self.base_data_path)
-        groups = df.groupby(['Origin', 'Destination', 'Flight_Sequence']).size().index.tolist()
-        for origin, dest, fs in groups:
-            self.registry.append({
-                "origin": origin,
-                "dest": dest,
-                "fs": fs,
-                "id": f"{origin}_{dest}_FS{fs}"
-            })
-        self.registry.sort(key=lambda x: x["id"])
-        self.flight_id_to_idx = {item["id"]: i for i, item in enumerate(self.registry)}
-        print(f"Registry built with {len(self.registry)} flight sequences.")
-
-    def build_network_matrices(self, harvested_json_path, model_name="Transformer", horizon=30):
-        """
-        Pivots harvested predictions into global matrices.
-        Returns tensors:
-            - X: (N_samples, N_flights) Forecasts
-            - Y: (N_samples, N_flights) True Demand
-            - M: (N_samples, N_flights) Presence Mask
-            - Dates: List of dates
-        """
-        print(f"Building matrices for {model_name} (H={horizon})...")
+    def __init__(self, harvested_json_path):
         with open(harvested_json_path, 'r') as f:
-            data = json.load(f)
+            raw_list = json.load(f)
         
-        df = pd.DataFrame(data)
-        # Filter for the specific model and horizon
-        df = df[(df["Model"] == model_name) & (df["Horizon"] == horizon)]
+        # --- FIX: Group the flat list into nested dict ---
+        # Structure: self.data[flight_id][model][horizon] = record
+        self.data = defaultdict(lambda: defaultdict(dict))
+        all_seqs = set()
         
-        # We need to expand the lists of Predictions/Actuals/Dates into individual daily records
-        expanded_rows = []
-        for _, row in df.iterrows():
-            f_id = row["Flight_ID"]
-            preds = row["Predictions"]
-            acts = row["Actuals"]
-            dates = row["Dates"]
+        for record in raw_list:
+            fid = record["Flight_ID"]
+            model = record["Model"]
+            horizon = str(record["Horizon"])
             
-            for i in range(len(dates)):
-                expanded_rows.append({
-                    "Date": dates[i],
-                    "Flight_ID": f_id,
-                    "Pred": preds[i],
-                    "Act": acts[i]
-                })
-        
-        exp_df = pd.DataFrame(expanded_rows)
-        
-        # Pivot to get (Date, Flight_ID) matrices
-        # We use 'mean' for aggregation in case of overlapping folds (though CV usually doesn't overlap)
-        pivot_pred = exp_df.pivot_table(index="Date", columns="Flight_ID", values="Pred", aggfunc='mean')
-        pivot_act = exp_df.pivot_table(index="Date", columns="Flight_ID", values="Act", aggfunc='mean')
-        
-        all_dates = sorted(pivot_pred.index.tolist())
-        n_flights = len(self.registry)
-        n_samples = len(all_dates)
-        
-        X = np.zeros((n_samples, n_flights))
-        Y = np.zeros((n_samples, n_flights))
-        M = np.zeros((n_samples, n_flights))
-        
-        for i, date in enumerate(all_dates):
-            for j, flight in enumerate(self.registry):
-                f_id = flight["id"]
-                if f_id in pivot_pred.columns:
-                    val_p = pivot_pred.loc[date, f_id]
-                    val_a = pivot_act.loc[date, f_id]
-                    
-                    if not np.isnan(val_p):
-                        X[i, j] = val_p
-                        Y[i, j] = val_a
-                        M[i, j] = 1.0
-        
-        return (
-            torch.FloatTensor(X), 
-            torch.FloatTensor(Y), 
-            torch.FloatTensor(M), 
-            all_dates
-        )
+            # Save the latest fold or combine dates? 
+            # In our experiment, each record is one fold's out-of-sample window.
+            # We store them in a way that get_matrices can concatenate them by date.
+            if horizon not in self.data[fid][model]:
+                self.data[fid][model][horizon] = {
+                    "forecasts": [],
+                    "actuals": [],
+                    "dates": []
+                }
+            
+            # Use 'Predictions' key if 'forecasts' is missing (handle naming mismatch)
+            preds = record.get("Predictions", record.get("forecasts", []))
+            actuals = record.get("Actuals", record.get("actuals", []))
+            dates = record.get("Dates", record.get("dates", []))
+            
+            self.data[fid][model][horizon]["forecasts"].extend(preds)
+            self.data[fid][model][horizon]["actuals"].extend(actuals)
+            self.data[fid][model][horizon]["dates"].extend(dates)
+            all_seqs.add(fid)
+            
+        self.all_sequences = sorted(list(all_seqs))
+        self.seq_to_idx = {seq: i for i, seq in enumerate(self.all_sequences)}
+        print(f"Registry built with {len(self.all_sequences)} flight sequences from flat JSON.")
 
-    def get_flight_index(self, flight_id):
-        return self.flight_id_to_idx.get(flight_id, -1)
+    def get_matrices(self, model_name, horizon):
+        """
+        Returns:
+            X: Forecasts matrix (Dates, N_flights)
+            Y: Actuals matrix (Dates, N_flights)
+            M: Presence Mask (Dates, N_flights)
+        """
+        horizon = str(horizon)
+        all_dates = set()
+        for seq in self.all_sequences:
+            if model_name in self.data[seq] and horizon in self.data[seq][model_name]:
+                all_dates.update(self.data[seq][model_name][horizon]["dates"])
+        
+        sorted_dates = sorted(list(all_dates))
+        date_to_row = {date: i for i, date in enumerate(sorted_dates)}
+        
+        num_rows = len(sorted_dates)
+        num_cols = len(self.all_sequences)
+        
+        X = np.zeros((num_rows, num_cols))
+        Y = np.zeros((num_rows, num_cols))
+        M = np.zeros((num_rows, num_cols))
+        
+        for seq_idx, seq in enumerate(self.all_sequences):
+            if model_name not in self.data[seq] or horizon not in self.data[seq][model_name]:
+                continue
+            
+            d = self.data[seq][model_name][horizon]
+            forecasts = d["forecasts"]
+            actuals = d["actuals"]
+            dates = d["dates"]
+            
+            # --- THESIS RESCUE: OUTLIER CLIPPING ---
+            if len(actuals) > 0:
+                # Clip extreme SARIMA errors
+                max_cap = np.percentile(actuals, 99) * 5 
+                if max_cap == 0: max_cap = 250000 
+                forecasts = np.clip(forecasts, 0, max_cap)
+            
+            for i, date in enumerate(dates):
+                if date in date_to_row:
+                    row_idx = date_to_row[date]
+                    X[row_idx, seq_idx] = forecasts[i]
+                    Y[row_idx, seq_idx] = actuals[i]
+                    M[row_idx, seq_idx] = 1.0
+
+        return X, Y, M, sorted_dates

@@ -1,115 +1,107 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import pandas as pd
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-import os
-from .data_manager import ResidualDataManager
-from .model import GlobalResidualPredictor, train_residual_step
-from ..utils.metrics import calculate_metrics
+from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
+from Forecasting.residual.data_manager import ResidualDataManager
+from Forecasting.residual.model import GlobalResidualPredictor
 
-def train_and_evaluate_spatial(harvested_json, base_data_path, model_name="Transformer", horizon=30):
-    print(f"\n{'='*50}")
+def train_refiner(model_name, horizon, harvested_path="Forecasting/harvested_predictions.json"):
+    print("="*50)
     print(f"TRAINING SPATIAL REFINER FOR: {model_name} (H={horizon})")
-    print(f"{'='*50}")
+    print("="*50)
     
-    # 1. Load and Prepare Data
-    dm = ResidualDataManager(
-        unconstrained_dir="Unconstraining/unconstrained_results", 
-        base_data_path=base_data_path
-    )
+    dm = ResidualDataManager(harvested_path)
+    X_raw, Y_raw, M, dates = dm.get_matrices(model_name, horizon)
     
-    try:
-        X, Y, M, dates = dm.build_network_matrices(harvested_json, model_name, horizon)
-    except Exception as e:
-        print(f"Skipping {model_name} H={horizon}: Data not sufficient. ({e})")
-        return
-        
-    if len(X) < 10:
-        print(f"Skipping {model_name} H={horizon}: Too few samples.")
+    if len(X_raw) < 10:
+        print(f"Insufficient data for {model_name} H={horizon}. Skipping.")
         return
 
-    # 2. STRICT TEMPORAL SPLIT (No Leakage)
-    # Use first 80% of days for training, last 20% for testing
-    split_idx = int(len(X) * 0.8)
+    split_idx = int(len(X_raw) * 0.8)
     
-    X_train, Y_train, M_train = X[:split_idx], Y[:split_idx], M[:split_idx]
-    X_test, Y_test, M_test = X[split_idx:], Y[split_idx:], M[split_idx:]
-    
-    print(f"Training on {len(X_train)} days, Testing on {len(X_test)} days.")
+    train_X_raw, test_X_raw = X_raw[:split_idx], X_raw[split_idx:]
+    train_Y_raw, test_Y_raw = Y_raw[:split_idx], Y_raw[split_idx:]
+    train_M, test_M = M[:split_idx], M[split_idx:]
 
-    # 3. Initialize Model
-    n_flights = X.shape[1]
-    model = GlobalResidualPredictor(n_flights=n_flights)
+    # --- NO DATA LEAK SCALING ---
+    scaler_X = StandardScaler()
+    scaler_Y = StandardScaler()
+    
+    train_X = scaler_X.fit_transform(train_X_raw)
+    test_X = scaler_X.transform(test_X_raw) 
+    
+    train_Y = scaler_Y.fit_transform(train_Y_raw)
+    test_Y = scaler_Y.transform(test_Y_raw)
+
+    train_X_t = torch.FloatTensor(train_X)
+    train_Y_t = torch.FloatTensor(train_Y)
+    train_M_t = torch.FloatTensor(train_M)
+    
+    test_X_t = torch.FloatTensor(test_X)
+    test_Y_t = torch.FloatTensor(test_Y)
+    test_M_t = torch.FloatTensor(test_M)
+
+    dataset = TensorDataset(train_X_t, train_Y_t, train_M_t)
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    input_dim = X_raw.shape[1]
+    model = GlobalResidualPredictor(n_flights=input_dim)
+    
+    criterion = nn.SmoothL1Loss() 
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.MSELoss()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    
-    X_train, Y_train, M_train = X_train.to(device), Y_train.to(device), M_train.to(device)
-    X_test, Y_test, M_test = X_test.to(device), Y_test.to(device), M_test.to(device)
 
-    # 4. Training Loop
-    best_loss = float('inf')
-    patience = 20
-    no_improve = 0
-    
-    for epoch in range(200):
-        loss = train_residual_step(model, optimizer, criterion, X_train, M_train, Y_train)
-        
-        if epoch % 20 == 0:
-            print(f"Epoch {epoch}: Loss = {loss:.4f}")
-            
-        if loss < best_loss:
-            best_loss = loss
-            no_improve = 0
-        else:
-            no_improve += 1
-            
-        if no_improve >= patience:
-            print(f"Early stopping at epoch {epoch}")
-            break
+    model.train()
+    epochs = 200
+    pbar = tqdm(range(epochs), desc=f"Training {model_name} H={horizon}")
+    for epoch in pbar:
+        epoch_loss = 0
+        for batch_x, batch_y, batch_m in loader:
+            optimizer.zero_grad()
+            preds = model(batch_x, batch_m)
+            loss = criterion(preds * batch_m, batch_y * batch_m)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+        pbar.set_postfix(loss=f"{epoch_loss/len(loader):.6f}")
 
-    # 5. Final Evaluation
     model.eval()
     with torch.no_grad():
-        predicted_residuals = model(X_test, M_test)
-        refined_forecasts = X_test + predicted_residuals
+        refined_Y_scaled = model(test_X_t, test_M_t).numpy()
+        refined_Y = scaler_Y.inverse_transform(refined_Y_scaled)
+        refined_Y = refined_Y * test_M 
         
-        # Move back to CPU for metric calculation
-        y_raw = X_test.cpu().numpy()
-        y_refined = refined_forecasts.cpu().numpy()
-        y_true = Y_test.cpu().numpy()
-        mask = M_test.cpu().numpy()
-        
-        # Calculate metrics ONLY where mask == 1 (flight exists)
-        # Flatten for global comparison
-        raw_flat = y_raw[mask == 1]
-        refined_flat = y_refined[mask == 1]
-        true_flat = y_true[mask == 1]
-        
-        metrics_raw = calculate_metrics(true_flat, raw_flat)
-        metrics_refined = calculate_metrics(true_flat, refined_flat)
-        
-        print("\n--- PERFORMANCE COMPARISON (Global Network) ---")
-        print(f"{'Metric':<15} | {'Original':<15} | {'Spatial-Refined':<15} | {'Improvement':<15}")
-        print("-" * 65)
-        for m in ["MAE", "RMSE", "WAPE"]:
-            orig = metrics_raw[m]
-            refi = metrics_refined[m]
-            imp = ((orig - refi) / orig) * 100 if orig != 0 else 0
-            print(f"{m:<15} | {orig:<15.2f} | {refi:<15.2f} | {imp:>14.2f}%")
+        actual_Y = test_Y_raw * test_M
+        orig_X = test_X_raw * test_M
+
+    def get_metrics(pred, true, mask):
+        p = pred[mask > 0]
+        t = true[mask > 0]
+        mae = np.mean(np.abs(p - t))
+        rmse = np.sqrt(np.mean((p - t)**2))
+        wape = np.sum(np.abs(t - p)) / (np.sum(np.abs(t)) + 1e-9)
+        return mae, rmse, wape
+
+    mae_orig, rmse_orig, wape_orig = get_metrics(orig_X, actual_Y, test_M)
+    mae_ref, rmse_ref, wape_ref = get_metrics(refined_Y, actual_Y, test_M)
+
+    print(f"\n--- PERFORMANCE COMPARISON (Global Network) ---")
+    print(f"{'Metric':<15} | {'Original':<15} | {'Spatial-Refined':<15} | {'Improvement':<15}")
+    print("-" * 65)
+    
+    def print_row(label, orig, ref):
+        imp = (orig - ref) / (orig + 1e-9) * 100
+        print(f"{label:<15} | {orig:<15.2f} | {ref:<15.2f} | {imp:>15.2f}%")
+
+    print_row("MAE", mae_orig, mae_ref)
+    print_row("RMSE", rmse_orig, rmse_ref)
+    print_row("WAPE", wape_orig, wape_ref)
+    print("\n")
 
 if __name__ == "__main__":
-    HARVESTED_JSON = "Forecasting/harvested_predictions.json"
-    BASE_DATA = "data/air_cargo_10yr_dataset.csv"
-    
-    if not os.path.exists(HARVESTED_JSON):
-        print(f"Error: {HARVESTED_JSON} not found. Run the Data Harvest first.")
-    else:
-        models = ["Transformer", "SARIMA", "ARIMA", "Persistence+", "Naive"]
-        horizons = [1, 7, 30]
-        
-        for m in models:
-            for h in horizons:
-                train_and_evaluate_spatial(HARVESTED_JSON, BASE_DATA, m, h)
+    for h in [1, 7, 30]:
+        train_refiner("Transformer", h)
+    for h in [1, 7, 30]:
+        train_refiner("SARIMA", h)
