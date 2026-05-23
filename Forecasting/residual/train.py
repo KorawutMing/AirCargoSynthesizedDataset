@@ -7,101 +7,102 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from Forecasting.residual.data_manager import ResidualDataManager
 from Forecasting.residual.model import GlobalResidualPredictor
+import json
 
 def train_refiner(model_name, horizon, harvested_path="Forecasting/harvested_predictions.json"):
-    print("="*50)
-    print(f"TRAINING SPATIAL REFINER FOR: {model_name} (H={horizon})")
-    print("="*50)
-    
     dm = ResidualDataManager(harvested_path)
-    X_raw, Y_raw, M, dates = dm.get_matrices(model_name, horizon)
+    X_raw, Y_raw, M, E_raw, dates = dm.get_matrices(model_name, horizon)
     
     if len(X_raw) < 10:
-        print(f"Insufficient data for {model_name} H={horizon}. Skipping.")
-        return
+        return None
 
+    Resid_raw = Y_raw - X_raw
     split_idx = int(len(X_raw) * 0.8)
     
-    train_X_raw, test_X_raw = X_raw[:split_idx], X_raw[split_idx:]
-    train_Y_raw, test_Y_raw = Y_raw[:split_idx], Y_raw[split_idx:]
-    train_M, test_M = M[:split_idx], M[split_idx:]
+    tr_X_raw, te_X_raw = X_raw[:split_idx], X_raw[split_idx:]
+    tr_Res_raw = Resid_raw[:split_idx]
+    tr_E_raw, te_E_raw = E_raw[:split_idx], E_raw[split_idx:]
+    te_Y_raw = Y_raw[split_idx:]
+    tr_M, te_M = M[:split_idx], M[split_idx:]
 
-    # --- NO DATA LEAK SCALING ---
-    scaler_X = StandardScaler()
-    scaler_Y = StandardScaler()
-    
-    train_X = scaler_X.fit_transform(train_X_raw)
-    test_X = scaler_X.transform(test_X_raw) 
-    
-    train_Y = scaler_Y.fit_transform(train_Y_raw)
-    test_Y = scaler_Y.transform(test_Y_raw)
+    sc_X, sc_R, sc_E = StandardScaler(), StandardScaler(), StandardScaler()
+    tr_X = sc_X.fit_transform(tr_X_raw)
+    te_X = sc_X.transform(te_X_raw)
+    tr_Res = sc_R.fit_transform(tr_Res_raw)
+    tr_E = sc_E.fit_transform(tr_E_raw)
+    te_E = sc_E.transform(te_E_raw)
 
-    train_X_t = torch.FloatTensor(train_X)
-    train_Y_t = torch.FloatTensor(train_Y)
-    train_M_t = torch.FloatTensor(train_M)
-    
-    test_X_t = torch.FloatTensor(test_X)
-    test_Y_t = torch.FloatTensor(test_Y)
-    test_M_t = torch.FloatTensor(test_M)
+    train_ds = TensorDataset(torch.FloatTensor(tr_X), torch.FloatTensor(tr_Res), 
+                             torch.FloatTensor(tr_M), torch.FloatTensor(tr_E))
+    loader = DataLoader(train_ds, batch_size=32, shuffle=True)
 
-    dataset = TensorDataset(train_X_t, train_Y_t, train_M_t)
-    loader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-    input_dim = X_raw.shape[1]
-    model = GlobalResidualPredictor(n_flights=input_dim)
-    
-    criterion = nn.SmoothL1Loss() 
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    model = GlobalResidualPredictor(n_flights=X_raw.shape[1], extra_dim=E_raw.shape[1], hidden_dim=128)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-3)
+    criterion = nn.SmoothL1Loss()
 
     model.train()
-    epochs = 200
-    pbar = tqdm(range(epochs), desc=f"Training {model_name} H={horizon}")
-    for epoch in pbar:
-        epoch_loss = 0
-        for batch_x, batch_y, batch_m in loader:
+    for epoch in range(150):
+        for bx, br, bm, be in loader:
             optimizer.zero_grad()
-            preds = model(batch_x, batch_m)
-            loss = criterion(preds * batch_m, batch_y * batch_m)
-            loss.backward()
+            pred_r = model(bx, bm, be)
+            loss = criterion(pred_r * bm, br * bm)
+            l1_lambda = 1e-4
+            l1_norm = sum(p.abs().sum() for p in model.parameters())
+            (loss + l1_lambda * l1_norm).backward()
             optimizer.step()
-            epoch_loss += loss.item()
-        pbar.set_postfix(loss=f"{epoch_loss/len(loader):.6f}")
 
     model.eval()
     with torch.no_grad():
-        refined_Y_scaled = model(test_X_t, test_M_t).numpy()
-        refined_Y = scaler_Y.inverse_transform(refined_Y_scaled)
-        refined_Y = refined_Y * test_M 
-        
-        actual_Y = test_Y_raw * test_M
-        orig_X = test_X_raw * test_M
+        ref_R_scaled = model(torch.FloatTensor(te_X), torch.FloatTensor(te_M), torch.FloatTensor(te_E)).numpy()
+        ref_R = sc_R.inverse_transform(ref_R_scaled)
+        ref_Y = (te_X_raw + ref_R) * te_M
+        act_Y = te_Y_raw * te_M
+        orig_X = test_X_raw = te_X_raw * te_M # Fixed possible scope bug
 
-    def get_metrics(pred, true, mask):
-        p = pred[mask > 0]
-        t = true[mask > 0]
-        mae = np.mean(np.abs(p - t))
-        rmse = np.sqrt(np.mean((p - t)**2))
-        wape = np.sum(np.abs(t - p)) / (np.sum(np.abs(t)) + 1e-9)
-        return mae, rmse, wape
+    def get_metrics(p, t, m):
+        p, t = p[m > 0], t[m > 0]
+        return np.mean(np.abs(p-t)), np.sqrt(np.mean((p-t)**2)), np.sum(np.abs(t-p))/(np.sum(np.abs(t))+1e-9)
 
-    mae_orig, rmse_orig, wape_orig = get_metrics(orig_X, actual_Y, test_M)
-    mae_ref, rmse_ref, wape_ref = get_metrics(refined_Y, actual_Y, test_M)
-
-    print(f"\n--- PERFORMANCE COMPARISON (Global Network) ---")
-    print(f"{'Metric':<15} | {'Original':<15} | {'Spatial-Refined':<15} | {'Improvement':<15}")
-    print("-" * 65)
+    m_o, r_o, w_o = get_metrics(orig_X, act_Y, te_M)
+    m_r, r_r, w_r = get_metrics(ref_Y, act_Y, te_M)
     
-    def print_row(label, orig, ref):
-        imp = (orig - ref) / (orig + 1e-9) * 100
-        print(f"{label:<15} | {orig:<15.2f} | {ref:<15.2f} | {imp:>15.2f}%")
-
-    print_row("MAE", mae_orig, mae_ref)
-    print_row("RMSE", rmse_orig, rmse_ref)
-    print_row("WAPE", wape_orig, wape_ref)
-    print("\n")
+    return {
+        "MAE": (float(m_o), float(m_r), float((m_o - m_r)/m_o*100)),
+        "RMSE": (float(r_o), float(r_r), float((r_o - r_r)/r_o*100)),
+        "WAPE": (float(w_o), float(w_r), float((w_o - w_r)/w_o*100))
+    }
 
 if __name__ == "__main__":
-    for h in [1, 7, 30]:
-        train_refiner("Transformer", h)
-    for h in [1, 7, 30]:
-        train_refiner("SARIMA", h)
+    with open("Forecasting/harvested_predictions.json", 'r') as f:
+        data = json.load(f)
+    models = sorted(list(set(r["Model"] for r in data)))
+    horizons = [1, 7, 30]
+    
+    print(f"Starting Comprehensive Refinement for models: {models}")
+    
+    results = {}
+    for m in models:
+        results[m] = {}
+        for h in horizons:
+            print(f"Processing {m} (H={h})...")
+            res = train_refiner(m, h)
+            if res:
+                results[m][str(h)] = res # Use str key for JSON safety
+
+    print("\n\n" + "="*80)
+    print(f"{'Model':<15} | {'H':<3} | {'Metric':<6} | {'Original':<10} | {'Refined':<10} | {'Improvement':<12}")
+    print("-" * 80)
+    
+    for m in models:
+        for h in horizons:
+            h_str = str(h)
+            if h_str in results[m]:
+                res = results[m][h_str]
+                for metric in ["MAE", "WAPE"]:
+                    orig, ref, imp = res[metric]
+                    print(f"{m:<15} | {h:<3} | {metric:<6} | {orig:<10.2f} | {ref:<10.2f} | {imp:>10.2f}%")
+        print("-" * 80)
+        
+    with open("Forecasting/spatial_refinement_results.json", "w") as f:
+        json.dump(results, f, indent=4)
+    print("\nResults saved to Forecasting/spatial_refinement_results.json")

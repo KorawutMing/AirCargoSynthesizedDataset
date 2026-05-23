@@ -8,27 +8,23 @@ class ResidualDataManager:
         with open(harvested_json_path, 'r') as f:
             raw_list = json.load(f)
         
-        # --- FIX: Group the flat list into nested dict ---
-        # Structure: self.data[flight_id][model][horizon] = record
         self.data = defaultdict(lambda: defaultdict(dict))
+        self.seq_to_segment = {}
         all_seqs = set()
+        self.segments = set()
         
         for record in raw_list:
             fid = record["Flight_ID"]
             model = record["Model"]
             horizon = str(record["Horizon"])
+            seg = record.get("Segment", "Unknown")
             
-            # Save the latest fold or combine dates? 
-            # In our experiment, each record is one fold's out-of-sample window.
-            # We store them in a way that get_matrices can concatenate them by date.
+            self.seq_to_segment[fid] = seg
+            self.segments.add(seg)
+            
             if horizon not in self.data[fid][model]:
-                self.data[fid][model][horizon] = {
-                    "forecasts": [],
-                    "actuals": [],
-                    "dates": []
-                }
+                self.data[fid][model][horizon] = {"forecasts": [], "actuals": [], "dates": []}
             
-            # Use 'Predictions' key if 'forecasts' is missing (handle naming mismatch)
             preds = record.get("Predictions", record.get("forecasts", []))
             actuals = record.get("Actuals", record.get("actuals", []))
             dates = record.get("Dates", record.get("dates", []))
@@ -39,16 +35,10 @@ class ResidualDataManager:
             all_seqs.add(fid)
             
         self.all_sequences = sorted(list(all_seqs))
-        self.seq_to_idx = {seq: i for i, seq in enumerate(self.all_sequences)}
-        print(f"Registry built with {len(self.all_sequences)} flight sequences from flat JSON.")
+        self.sorted_segments = sorted(list(self.segments))
+        print(f"Registry built: {len(self.all_sequences)} flights, {len(self.sorted_segments)} segments.")
 
     def get_matrices(self, model_name, horizon):
-        """
-        Returns:
-            X: Forecasts matrix (Dates, N_flights)
-            Y: Actuals matrix (Dates, N_flights)
-            M: Presence Mask (Dates, N_flights)
-        """
         horizon = str(horizon)
         all_dates = set()
         for seq in self.all_sequences:
@@ -58,34 +48,43 @@ class ResidualDataManager:
         sorted_dates = sorted(list(all_dates))
         date_to_row = {date: i for i, date in enumerate(sorted_dates)}
         
-        num_rows = len(sorted_dates)
-        num_cols = len(self.all_sequences)
-        
-        X = np.zeros((num_rows, num_cols))
-        Y = np.zeros((num_rows, num_cols))
-        M = np.zeros((num_rows, num_cols))
+        X = np.zeros((len(sorted_dates), len(self.all_sequences)))
+        Y = np.zeros((len(sorted_dates), len(self.all_sequences)))
+        M = np.zeros((len(sorted_dates), len(self.all_sequences)))
         
         for seq_idx, seq in enumerate(self.all_sequences):
-            if model_name not in self.data[seq] or horizon not in self.data[seq][model_name]:
-                continue
-            
+            if model_name not in self.data[seq] or horizon not in self.data[seq][model_name]: continue
             d = self.data[seq][model_name][horizon]
-            forecasts = d["forecasts"]
-            actuals = d["actuals"]
-            dates = d["dates"]
             
-            # --- THESIS RESCUE: OUTLIER CLIPPING ---
-            if len(actuals) > 0:
-                # Clip extreme SARIMA errors
-                max_cap = np.percentile(actuals, 99) * 5 
-                if max_cap == 0: max_cap = 250000 
-                forecasts = np.clip(forecasts, 0, max_cap)
-            
-            for i, date in enumerate(dates):
-                if date in date_to_row:
-                    row_idx = date_to_row[date]
-                    X[row_idx, seq_idx] = forecasts[i]
-                    Y[row_idx, seq_idx] = actuals[i]
-                    M[row_idx, seq_idx] = 1.0
+            f_vals = np.array(d["forecasts"])
+            a_vals = np.array(d["actuals"])
 
-        return X, Y, M, sorted_dates
+            # --- LEAK-FREE CLIPPING ---
+            # We use a hard-cap heuristic (e.g. 500 tons for a cargo flight) 
+            # or a very high fixed value to only catch the SARIMA 'infinity' errors.
+            # This is safer than using np.percentile on the whole series.
+            f_vals = np.clip(f_vals, 0, 1000000) # 1000 tons is a safe upper bound for any single flight sequence
+
+            for i, date in enumerate(d["dates"]):
+                if date in date_to_row:
+                    r = date_to_row[date]
+                    X[r, seq_idx] = f_vals[i]
+                    Y[r, seq_idx] = a_vals[i]
+                    M[r, seq_idx] = 1.0
+
+        # Feature Engineering: DOW and Market Aggregates
+        df_dates = pd.to_datetime(sorted_dates)
+        dow = pd.get_dummies(df_dates.dayofweek).values
+        if dow.shape[1] < 7:
+            temp = np.zeros((len(sorted_dates), 7))
+            temp[:, :dow.shape[1]] = dow
+            dow = temp
+
+        net_total = X.sum(axis=1, keepdims=True)
+        seg_totals = np.zeros((len(sorted_dates), len(self.sorted_segments)))
+        for i, seg in enumerate(self.sorted_segments):
+            seg_indices = [idx for idx, s in enumerate(self.all_sequences) if self.seq_to_segment[s] == seg]
+            seg_totals[:, i] = X[:, seg_indices].sum(axis=1)
+
+        extras = np.hstack([dow, net_total, seg_totals])
+        return X, Y, M, extras, sorted_dates
