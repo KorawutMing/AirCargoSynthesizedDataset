@@ -12,14 +12,14 @@ from .utils.metrics import calculate_metrics
 
 def evaluate_task_rolling_single_model(args):
     """
-    Highly granular worker: Trains and predicts for ONE model.
+    Highly granular worker: Trains and predicts for ONE model using Slide-and-Predict.
     """
-    origin, dest, flight_seq, segment_name, model_name, y_all, dates, test_start_idx, horizons = args
+    origin, dest, flight_seq, segment_name, model_name, y_all, dates, test_days, horizons = args
     results = []
     
-    y_train = y_all[:test_start_idx]
-    y_test_full = y_all[test_start_idx:]
-    test_dates_full = dates[test_start_idx:]
+    # Training data is everything before the evaluation period (plus buffer for H30 origin)
+    eval_start_idx = len(y_all) - test_days
+    y_train = y_all[:eval_start_idx - max(horizons)]
     
     max_h = max(horizons)
     flight_id = f"{origin}_{dest}_FS{flight_seq}"
@@ -36,32 +36,38 @@ def evaluate_task_rolling_single_model(args):
     try:
         model.train(y_train)
         
+        # Slide-and-Predict loop for each horizon
         for h in horizons:
             preds = []
             actuals = []
             valid_dates = []
             
-            if model_name == "Naive":
-                for i in range(len(y_test_full)):
-                    val = y_train[-(h-i)] if i < h else y_test_full[i-h]
-                    preds.append(float(val)); actuals.append(float(y_test_full[i]))
-                    valid_dates.append(test_dates_full[i].strftime("%Y-%m-%d"))
-            
-            elif model_name == "SMA":
-                for i in range(len(y_test_full)):
-                    window = (list(y_train) + list(y_test_full[:i-h+1]))[-30:] if i >= h else y_train[-(30+h-i):][:30]
-                    preds.append(float(np.mean(window))); actuals.append(float(y_test_full[i]))
-                    valid_dates.append(test_dates_full[i].strftime("%Y-%m-%d"))
-            
-            else:
-                y_pred_long = model.predict(steps=len(y_test_full))
-                if len(y_pred_long) < len(y_test_full):
-                    last_p = y_pred_long[-1] if len(y_pred_long) > 0 else 0
-                    y_pred_long = np.concatenate([y_pred_long, np.full(len(y_test_full)-len(y_pred_long), last_p)])
+            # For every target day in the evaluation period
+            for i in range(test_days):
+                target_idx = eval_start_idx + i
+                origin_idx = target_idx - h
+                history_to_origin = y_all[:origin_idx + 1]
                 
-                preds = [float(p) for p in y_pred_long]
-                actuals = [float(a) for a in y_test_full]
-                valid_dates = [d.strftime("%Y-%m-%d") for d in test_dates_full]
+                if model_name == "Naive":
+                    p = float(history_to_origin[-1])
+                elif model_name == "SMA":
+                    p = float(np.mean(history_to_origin[-30:]))
+                elif model_name == "Transformer":
+                    window = history_to_origin[-model.window_size:]
+                    y_pred = model.predict(steps=h, last_window=window)
+                    p = float(y_pred[h-1])
+                elif model_name in ["ARIMA", "SARIMA"]:
+                    y_pred = model.predict(steps=h, new_history=history_to_origin)
+                    p = float(y_pred[h-1])
+                elif model_name == "Persistence+":
+                    model.history = history_to_origin
+                    y_pred = model.predict(steps=h)
+                    p = float(y_pred[h-1])
+                else: continue
+                
+                preds.append(p)
+                actuals.append(float(y_all[target_idx]))
+                valid_dates.append(dates[target_idx].strftime("%Y-%m-%d"))
 
             metrics = calculate_metrics(np.array(actuals), np.array(preds))
             metrics.update({
@@ -125,7 +131,7 @@ class ForecastingExperiment:
         report_path = os.path.join(os.path.dirname(__file__), "results", "REPORT.md")
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
         with open(report_path, "w") as f:
-            f.write("# Forecasting Performance Report (Rolling Inference Mode)\n\n")
+            f.write("# Forecasting Performance Report (Dense Rolling Inference Mode)\n\n")
             f.write("## 1. Global Summary\n")
             summary = df_results.groupby(["Horizon", "Model"])[["MAE", "RMSE", "WAPE", "Trend (Corr)"]].mean().sort_values(["Horizon", "MAE"])
             f.write(summary.to_markdown() + "\n\n")
@@ -148,8 +154,8 @@ class ForecastingExperiment:
         for origin, dest, flight_seq in all_groups:
             ts_data = self.get_route_data(origin, dest, flight_seq)
             dates = ts_data.index
-            test_start_idx = len(ts_data) - test_days
-            if test_start_idx < 100: continue
+            # Ensure we have enough data for training + origin buffer + test days
+            if len(ts_data) < test_days + max(horizons) + 100: continue
             
             for segment_col in ts_data.columns:
                 y = ts_data[segment_col].values
@@ -157,13 +163,13 @@ class ForecastingExperiment:
                 
                 for m_name in model_names:
                     all_tasks.append((
-                        origin, dest, flight_seq, segment_name, m_name, y, dates, test_start_idx, horizons
+                        origin, dest, flight_seq, segment_name, m_name, y, dates, test_days, horizons
                     ))
 
         if max_workers is None:
             max_workers = max(1, os.cpu_count() // 2)
         
-        print(f"Starting Highly Granular Harvest: {len(all_tasks)} tasks...")
+        print(f"Starting Dense Rolling Harvest: {len(all_tasks)} tasks...")
         
         all_results = []
         save_path = "Forecasting/results/harvested_predictions.json"

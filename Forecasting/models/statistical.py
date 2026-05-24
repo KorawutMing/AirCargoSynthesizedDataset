@@ -24,11 +24,17 @@ class ARIMAForecaster(BaseForecaster):
         except Exception:
             self.model_res = None
 
-    def predict(self, steps=None):
+    def predict(self, steps=None, new_history=None):
         n = steps or self.horizon
         if self.model_res is not None:
             try:
-                forecast = self.model_res.forecast(steps=n)
+                if new_history is not None:
+                    # Slide the model forward to the new origin without refitting
+                    # This applies the same AR/MA coefficients to the new data
+                    new_res = self.model_res.apply(new_history, refit=False)
+                    forecast = new_res.forecast(steps=n)
+                else:
+                    forecast = self.model_res.forecast(steps=n)
                 return np.array(forecast)
             except Exception:
                 pass
@@ -54,11 +60,17 @@ class SARIMAForecaster(BaseForecaster):
         except Exception:
             self.model_res = None
 
-    def predict(self, steps=None):
+    def predict(self, steps=None, new_history=None):
         n = steps or self.horizon
         if self.model_res is not None:
             try:
-                forecast = self.model_res.forecast(steps=n)
+                if new_history is not None:
+                    # Slide the model forward to the new origin without refitting
+                    # This applies the same AR/MA coefficients to the new data
+                    new_res = self.model_res.apply(new_history, refit=False)
+                    forecast = new_res.forecast(steps=n)
+                else:
+                    forecast = self.model_res.forecast(steps=n)
                 return np.array(forecast)
             except Exception:
                 pass

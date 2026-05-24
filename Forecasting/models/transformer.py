@@ -117,10 +117,16 @@ class TransformerForecaster(BaseForecaster):
         # For prediction, use the last window of the full training data
         self.last_window = self.scaler.transform(y_raw[-self.window_size:])
 
-    def predict(self, steps=None):
+    def predict(self, steps=None, last_window=None):
         self.model.eval()
         with torch.no_grad():
-            x = torch.FloatTensor(self.last_window).unsqueeze(0).to(self.device)
+            if last_window is not None:
+                # Scaler was already fit during training
+                window_sc = self.scaler.transform(last_window.reshape(-1, 1))
+                x = torch.FloatTensor(window_sc).unsqueeze(0).to(self.device)
+            else:
+                x = torch.FloatTensor(self.last_window).unsqueeze(0).to(self.device)
+            
             output = self.model(x)
             pred_scaled = output.cpu().numpy().flatten()
             pred = self.scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
