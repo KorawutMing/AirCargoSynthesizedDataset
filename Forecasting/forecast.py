@@ -36,27 +36,85 @@ def evaluate_task_rolling_single_model(args):
     try:
         model.train(y_train)
         
-        # Slide-and-Predict loop for each horizon
+        # Pre-calculate common metrics indices
+        # Evaluation window is y_all[eval_start_idx : eval_start_idx + test_days]
+        eval_indices = np.arange(eval_start_idx, eval_start_idx + test_days)
+        actual_vals = y_all[eval_indices]
+        
+        # PERFORMANCE OPTIMIZATION: Model-specific fast paths
+        if model_name == "Naive":
+            for h in horizons:
+                preds = [float(y_all[idx - h]) for idx in eval_indices]
+                valid_dates = [dates[idx].strftime("%Y-%m-%d") for idx in eval_indices]
+                metrics = calculate_metrics(actual_vals, np.array(preds))
+                metrics.update({
+                    "Route": f"{origin}-{dest}", "Flight_ID": flight_id, "Segment": segment_name,
+                    "Model": model_name, "Fold": 0, "Horizon": h, "Dates": valid_dates,
+                    "Predictions": preds, "Actuals": [float(a) for a in actual_vals]
+                })
+                results.append(metrics)
+            return results
+
+        elif model_name == "SMA":
+            for h in horizons:
+                preds = []
+                for idx in eval_indices:
+                    # Average of 30 days ending at origin (idx - h)
+                    origin_idx = idx - h
+                    window = y_all[max(0, origin_idx - 29) : origin_idx + 1]
+                    preds.append(float(np.mean(window)))
+                valid_dates = [dates[idx].strftime("%Y-%m-%d") for idx in eval_indices]
+                metrics = calculate_metrics(actual_vals, np.array(preds))
+                metrics.update({
+                    "Route": f"{origin}-{dest}", "Flight_ID": flight_id, "Segment": segment_name,
+                    "Model": model_name, "Fold": 0, "Horizon": h, "Dates": valid_dates,
+                    "Predictions": preds, "Actuals": [float(a) for a in actual_vals]
+                })
+                results.append(metrics)
+            return results
+
+        elif model_name == "Transformer":
+            # Batch all windows for all target days and all horizons
+            # Total windows: test_days * len(horizons)
+            all_windows = []
+            for h in horizons:
+                for idx in eval_indices:
+                    origin_idx = idx - h
+                    window = y_all[origin_idx - (model.window_size - 1) : origin_idx + 1]
+                    all_windows.append(window)
+            
+            # Predict in one massive batch
+            batch_preds = model.predict(last_window=np.array(all_windows))
+            # batch_preds shape: [test_days * len(horizons), max_h]
+            
+            cursor = 0
+            for h in horizons:
+                preds = []
+                for i in range(test_days):
+                    # We want the h-th step prediction from the origin window
+                    # batch_preds[cursor] is the array [p1, p2, ... ph, ... p30]
+                    p = float(batch_preds[cursor][h-1])
+                    preds.append(p)
+                    cursor += 1
+                
+                valid_dates = [dates[idx].strftime("%Y-%m-%d") for idx in eval_indices]
+                metrics = calculate_metrics(actual_vals, np.array(preds))
+                metrics.update({
+                    "Route": f"{origin}-{dest}", "Flight_ID": flight_id, "Segment": segment_name,
+                    "Model": model_name, "Fold": 0, "Horizon": h, "Dates": valid_dates,
+                    "Predictions": preds, "Actuals": [float(a) for a in actual_vals]
+                })
+                results.append(metrics)
+            return results
+
+        # Fallback for complex statistical models (ARIMA/SARIMA/Persistence+)
         for h in horizons:
             preds = []
-            actuals = []
-            valid_dates = []
-            
-            # For every target day in the evaluation period
-            for i in range(test_days):
-                target_idx = eval_start_idx + i
-                origin_idx = target_idx - h
+            for idx in eval_indices:
+                origin_idx = idx - h
                 history_to_origin = y_all[:origin_idx + 1]
                 
-                if model_name == "Naive":
-                    p = float(history_to_origin[-1])
-                elif model_name == "SMA":
-                    p = float(np.mean(history_to_origin[-30:]))
-                elif model_name == "Transformer":
-                    window = history_to_origin[-model.window_size:]
-                    y_pred = model.predict(steps=h, last_window=window)
-                    p = float(y_pred[h-1])
-                elif model_name in ["ARIMA", "SARIMA"]:
+                if model_name in ["ARIMA", "SARIMA"]:
                     y_pred = model.predict(steps=h, new_history=history_to_origin)
                     p = float(y_pred[h-1])
                 elif model_name == "Persistence+":
@@ -64,16 +122,14 @@ def evaluate_task_rolling_single_model(args):
                     y_pred = model.predict(steps=h)
                     p = float(y_pred[h-1])
                 else: continue
-                
                 preds.append(p)
-                actuals.append(float(y_all[target_idx]))
-                valid_dates.append(dates[target_idx].strftime("%Y-%m-%d"))
-
-            metrics = calculate_metrics(np.array(actuals), np.array(preds))
+            
+            valid_dates = [dates[idx].strftime("%Y-%m-%d") for idx in eval_indices]
+            metrics = calculate_metrics(actual_vals, np.array(preds))
             metrics.update({
                 "Route": f"{origin}-{dest}", "Flight_ID": flight_id, "Segment": segment_name,
                 "Model": model_name, "Fold": 0, "Horizon": h, "Dates": valid_dates,
-                "Predictions": preds, "Actuals": actuals
+                "Predictions": preds, "Actuals": [float(a) for a in actual_vals]
             })
             results.append(metrics)
     except Exception:

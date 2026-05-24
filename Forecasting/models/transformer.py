@@ -118,16 +118,38 @@ class TransformerForecaster(BaseForecaster):
         self.last_window = self.scaler.transform(y_raw[-self.window_size:])
 
     def predict(self, steps=None, last_window=None):
+        """
+        Supports both single-window and batch-window inference.
+        last_window can be [window_size] or [batch, window_size].
+        """
         self.model.eval()
         with torch.no_grad():
             if last_window is not None:
-                # Scaler was already fit during training
-                window_sc = self.scaler.transform(last_window.reshape(-1, 1))
-                x = torch.FloatTensor(window_sc).unsqueeze(0).to(self.device)
+                if last_window.ndim == 1:
+                    # Single window
+                    window_sc = self.scaler.transform(last_window.reshape(-1, 1))
+                    x = torch.FloatTensor(window_sc).unsqueeze(0).to(self.device)
+                else:
+                    # Batch of windows [B, W]
+                    # Reshape for scaler, then back
+                    B, W = last_window.shape
+                    flat_windows = last_window.reshape(-1, 1)
+                    sc_flat = self.scaler.transform(flat_windows)
+                    window_sc = sc_flat.reshape(B, W, 1)
+                    x = torch.FloatTensor(window_sc).to(self.device)
             else:
                 x = torch.FloatTensor(self.last_window).unsqueeze(0).to(self.device)
             
             output = self.model(x)
-            pred_scaled = output.cpu().numpy().flatten()
-            pred = self.scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
-            return pred[:steps] if steps else pred
+            # output is [B, Horizon]
+            pred_scaled = output.cpu().numpy()
+            
+            # Inverse transform is tricky for batch, simpler to do manually or flat
+            if pred_scaled.ndim == 1 or (pred_scaled.shape[0] == 1):
+                return self.scaler.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()[:steps]
+            else:
+                # Batch inverse transform
+                B, H = pred_scaled.shape
+                flat_pred = pred_scaled.reshape(-1, 1)
+                inv_flat = self.scaler.inverse_transform(flat_pred)
+                return inv_flat.reshape(B, H) # Returns [B, Horizon]
