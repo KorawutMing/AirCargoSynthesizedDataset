@@ -1,0 +1,47 @@
+\begin{table}[t]
+\caption{Spatial refinement results. $\Delta$~(\%) denotes percentage improvement of refined over raw error. Positive values indicate improvement.}
+\label{tab:spatial_refinement}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{llcrrr}
+\toprule
+Metric & Model & Horizon & Raw & Refined & Δ (%) \\
+\midrule
+RMSE & ARIMA & 1-day & 3,650.3 & 3,614.1 & +0.99% \\
+RMSE & ARIMA & 7-day & 4,321.6 & 4,024.1 & +6.88% \\
+RMSE & ARIMA & 30-day & 4,393.8 & 4,009.8 & +8.74% \\
+RMSE & Naive & 1-day & 4,580.3 & 4,095.8 & +10.58% \\
+RMSE & Naive & 7-day & 5,370.7 & 4,136.4 & +22.98% \\
+RMSE & Naive & 30-day & 5,569.9 & 4,149.0 & +25.51% \\
+RMSE & Persistence+ & 1-day & 4,524.5 & 4,066.6 & +10.12% \\
+RMSE & Persistence+ & 7-day & 5,210.9 & 4,145.4 & +20.45% \\
+RMSE & Persistence+ & 30-day & 5,171.7 & 4,239.2 & +18.03% \\
+RMSE & SARIMA & 1-day & 3,140.5 & 3,324.4 & -5.86% \\
+RMSE & SARIMA & 7-day & 3,885.3 & 3,945.2 & -1.54% \\
+RMSE & SARIMA & 30-day & 3,957.6 & 3,834.4 & +3.11% \\
+RMSE & SMA & 1-day & 3,891.9 & 3,597.4 & +7.57% \\
+RMSE & SMA & 7-day & 4,308.2 & 4,099.0 & +4.86% \\
+RMSE & SMA & 30-day & 4,367.8 & 3,916.3 & +10.34% \\
+RMSE & Transformer & 1-day & 3,268.5 & 3,369.2 & -3.08% \\
+RMSE & Transformer & 7-day & 3,988.8 & 3,822.3 & +4.17% \\
+RMSE & Transformer & 30-day & 4,170.1 & 3,967.0 & +4.87% \\
+MAE & ARIMA & 1-day & 2,881.8 & 2,823.5 & +2.02% \\
+MAE & ARIMA & 7-day & 3,217.6 & 2,933.9 & +8.82% \\
+MAE & ARIMA & 30-day & 3,253.1 & 2,874.6 & +11.64% \\
+MAE & Naive & 1-day & 3,593.6 & 3,195.3 & +11.08% \\
+MAE & Naive & 7-day & 4,112.5 & 3,013.4 & +26.73% \\
+MAE & Naive & 30-day & 4,259.1 & 2,990.1 & +29.79% \\
+MAE & Persistence+ & 1-day & 3,550.2 & 3,175.4 & +10.56% \\
+MAE & Persistence+ & 7-day & 3,975.0 & 3,030.1 & +23.77% \\
+MAE & Persistence+ & 30-day & 3,922.0 & 3,048.6 & +22.27% \\
+MAE & SARIMA & 1-day & 2,441.0 & 2,619.1 & -7.30% \\
+MAE & SARIMA & 7-day & 2,794.5 & 2,852.8 & -2.09% \\
+MAE & SARIMA & 30-day & 2,845.4 & 2,798.7 & +1.64% \\
+MAE & SMA & 1-day & 3,079.2 & 2,789.5 & +9.41% \\
+MAE & SMA & 7-day & 3,230.3 & 2,967.9 & +8.12% \\
+MAE & SMA & 30-day & 3,251.1 & 2,819.9 & +13.26% \\
+MAE & Transformer & 1-day & 2,516.3 & 2,614.2 & -3.89% \\
+MAE & Transformer & 7-day & 2,861.8 & 2,780.6 & +2.84% \\
+MAE & Transformer & 30-day & 2,990.1 & 2,940.4 & +1.66% \\
+\bottomrule
+\end{tabular}
+\end{table}

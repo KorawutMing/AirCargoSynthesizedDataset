@@ -3,13 +3,23 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+import random
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from data_manager import ResidualDataManager
 from model import GlobalResidualPredictor
 import json
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harvested_predictions.json"):
+    set_seed(42)
     dm = ResidualDataManager(harvested_path)
     X_raw, Y_raw, M_raw, E_raw, dates = dm.get_matrices(model_name, horizon)
     if len(X_raw) < 20: return None
