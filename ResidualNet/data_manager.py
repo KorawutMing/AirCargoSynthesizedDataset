@@ -8,13 +8,19 @@ class ResidualDataManager:
         with open(harvested_json_path, 'r') as f:
             raw_list = json.load(f)
         
+        self.segments = ['Contract', 'General', 'Perishable', 'Express', 'Spot']
+        self.seg_to_idx = {s: i for i, s in enumerate(self.segments)}
+        self.num_segs = len(self.segments)
+        
         self.data = defaultdict(lambda: defaultdict(dict))
         all_seqs = set()
         
         for record in raw_list:
-            fid = record["Flight_ID"]
+            # Use Flight_ID + Segment as unique sequence
+            fid = f"{record['Flight_ID']}_{record['Segment']}"
             model = record["Model"]
             horizon = str(record["Horizon"])
+            
             if horizon not in self.data[fid][model]:
                 self.data[fid][model][horizon] = {"forecasts": [], "actuals": [], "dates": []}
             
@@ -32,7 +38,11 @@ class ResidualDataManager:
         self.destinations = sorted(list(set(f.split('_')[1] for f in self.all_sequences)))
         self.orig_to_idx = {o: i for i, o in enumerate(self.origins)}
         self.dest_to_idx = {d: i for i, d in enumerate(self.destinations)}
-        self.max_fs = max(int(f.split('FS')[1]) for f in self.all_sequences)
+        
+        # Max flight sequence number (e.g., 4)
+        self.max_fs_num = max(int(f.split('_')[2][2:]) for f in self.all_sequences)
+        # Total channels per OD pair (flights * segments)
+        self.total_channels_per_od = self.max_fs_num * self.num_segs
 
     def get_matrices(self, model_name, horizon):
         horizon = str(horizon)
@@ -58,17 +68,14 @@ class ResidualDataManager:
             d_dates = d["dates"]
 
             # --- THESIS RESCUE: LOCAL MAXIMUM GUARD ---
-            # 1. Identify training portion of this specific flight
             train_actuals = []
             for i, date in enumerate(d_dates):
                 if date in date_to_row and date_to_row[date] < split_idx:
                     train_actuals.append(a_vals[i])
             
-            # 2. Clip forecasts to 2x the historical peak for this route
-            # This prevents SARIMA spikes from ruining the spatial image
             if len(train_actuals) > 0:
                 local_peak = np.max(train_actuals)
-                cap = max(local_peak * 2, 50000) # Minimum cap of 50t
+                cap = max(local_peak * 2.5, 20000) # Slightly higher cap for segments
                 f_vals = np.clip(f_vals, 0, cap)
             else:
                 f_vals = np.clip(f_vals, 0, 1000000)
@@ -90,13 +97,21 @@ class ResidualDataManager:
     def build_image_tensors(self, X, M):
         batch_size = X.shape[0]
         H, W = len(self.origins), len(self.destinations)
-        C = 2 * self.max_fs
+        C = 2 * self.total_channels_per_od
         img = np.zeros((batch_size, C, H, W))
         for seq_idx, seq in enumerate(self.all_sequences):
             parts = seq.split('_')
-            o_i, d_i, fs_i = self.orig_to_idx[parts[0]], self.dest_to_idx[parts[1]], int(parts[2][2:]) - 1
-            img[:, fs_i, o_i, d_i] = X[:, seq_idx]
-            img[:, self.max_fs + fs_i, o_i, d_i] = M[:, seq_idx]
+            # Origin_Dest_FSX_Segment
+            o_i = self.orig_to_idx[parts[0]]
+            d_i = self.dest_to_idx[parts[1]]
+            fs_i = int(parts[2][2:]) - 1
+            seg_i = self.seg_to_idx[parts[3]]
+            
+            # Map (FlightSeq, Segment) to channel index
+            channel_idx = fs_i * self.num_segs + seg_i
+            
+            img[:, channel_idx, o_i, d_i] = X[:, seq_idx]
+            img[:, self.total_channels_per_od + channel_idx, o_i, d_i] = M[:, seq_idx]
         return img
 
     def flatten_prediction(self, img_pred):
@@ -104,6 +119,11 @@ class ResidualDataManager:
         out = np.zeros((batch_size, len(self.all_sequences)))
         for seq_idx, seq in enumerate(self.all_sequences):
             parts = seq.split('_')
-            o_i, d_i, fs_i = self.orig_to_idx[parts[0]], self.dest_to_idx[parts[1]], int(parts[2][2:]) - 1
-            out[:, seq_idx] = img_pred[:, fs_i, o_i, d_i]
+            o_i = self.orig_to_idx[parts[0]]
+            d_i = self.dest_to_idx[parts[1]]
+            fs_i = int(parts[2][2:]) - 1
+            seg_i = self.seg_to_idx[parts[3]]
+            
+            channel_idx = fs_i * self.num_segs + seg_i
+            out[:, seq_idx] = img_pred[:, channel_idx, o_i, d_i]
         return out

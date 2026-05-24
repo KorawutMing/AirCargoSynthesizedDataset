@@ -39,13 +39,13 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harve
 
     tr_X_img = dm.build_image_tensors(tr_X_sc, tr_M)
     te_X_img = dm.build_image_tensors(te_X_sc, te_M)
-    tr_R_img = dm.build_image_tensors(tr_R_sc, tr_M)[:, :dm.max_fs, :, :]
+    tr_R_img = dm.build_image_tensors(tr_R_sc, tr_M)[:, :dm.total_channels_per_od, :, :]
 
     train_ds = TensorDataset(torch.FloatTensor(tr_X_img), torch.FloatTensor(tr_R_img), torch.FloatTensor(tr_E_sc))
     loader = DataLoader(train_ds, batch_size=32, shuffle=True)
 
     # Lightweight RMSE-optimized model
-    model = GlobalResidualPredictor(in_channels=dm.max_fs*2, out_channels=dm.max_fs, extra_dim=tr_E_sc.shape[1], hidden_dim=32)
+    model = GlobalResidualPredictor(in_channels=dm.total_channels_per_od*2, out_channels=dm.total_channels_per_od, extra_dim=tr_E_sc.shape[1], hidden_dim=32)
     optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-3)
     criterion = nn.MSELoss()
 

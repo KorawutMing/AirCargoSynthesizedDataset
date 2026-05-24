@@ -5,14 +5,20 @@ import json
 import matplotlib.pyplot as plt
 import sys
 import os
-sys.path.append(os.path.join(os.getcwd(), 'ResidualNet'))
+
+# Robust path handling for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
 
 from data_manager import ResidualDataManager
 from model import GlobalResidualPredictor
 from sklearn.preprocessing import StandardScaler
 
 def visualize_flight(model_name, horizon, flight_id):
-    dm = ResidualDataManager("Forecasting/results/harvested_predictions.json")
+    # Path is relative to project root
+    harvested_path = os.path.join("Forecasting", "results", "harvested_predictions.json")
+    dm = ResidualDataManager(harvested_path)
     X_raw, Y_raw, M_raw, E_raw, dates = dm.get_matrices(model_name, horizon)
     
     Resid_raw = Y_raw - X_raw
@@ -36,8 +42,9 @@ def visualize_flight(model_name, horizon, flight_id):
     te_X_img = dm.build_image_tensors(te_X_sc, te_M)
     
     # Load model
-    model = GlobalResidualPredictor(in_channels=dm.max_fs*2, out_channels=dm.max_fs, extra_dim=te_E_sc.shape[1], hidden_dim=32)
-    model.load_state_dict(torch.load(f"ResidualNet/results/weights/{model_name}_H{horizon}.pt", weights_only=True))
+    weights_path = os.path.join(current_dir, "results", "weights", f"{model_name}_H{horizon}.pt")
+    model = GlobalResidualPredictor(in_channels=dm.total_channels_per_od*2, out_channels=dm.total_channels_per_od, extra_dim=te_E_sc.shape[1], hidden_dim=32)
+    model.load_state_dict(torch.load(weights_path, weights_only=True))
     model.eval()
     
     with torch.no_grad():
@@ -92,13 +99,18 @@ def visualize_flight(model_name, horizon, flight_id):
     plt.legend()
     plt.xticks(rotation=45)
     plt.tight_layout()
-    os.makedirs("ResidualNet/results/timeseries", exist_ok=True)
-    plt.savefig(f"ResidualNet/results/timeseries/TS_{flight_id}_{model_name}_H{horizon}.png")
+    
+    save_dir = os.path.join(current_dir, "results", "timeseries")
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, f"TS_{flight_id}_{model_name}_H{horizon}.png"))
     plt.close()
 
 if __name__ == "__main__":
+    # If run from project root: python ResidualNet/visualize_timeseries.py
     models = ["Naive", "SARIMA", "Transformer"]
     horizons = [1, 7, 30]
+    segments = ["Spot", "General", "Contract"]
     for m in models:
         for h in horizons:
-            visualize_flight(m, h, "PEK_LAX_FS1")
+            for s in segments:
+                visualize_flight(m, h, f"PEK_LAX_FS1_{s}")

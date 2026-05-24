@@ -42,7 +42,9 @@ class GlobalResidualPredictor(nn.Module):
         p1 = self.pool(e1)
         
         # Tile extras (DOW)
-        e_tiled = extras.view(extras.size(0), extras.size(1), 1, 1).expand(-1, -1, 5, 5)
+        # Dynamically match the pooled spatial dimensions
+        H_p, W_p = p1.shape[2], p1.shape[3]
+        e_tiled = extras.view(extras.size(0), extras.size(1), 1, 1).expand(-1, -1, H_p, W_p)
         bn = self.bottleneck(torch.cat([p1, e_tiled], dim=1))
         
         # Decoder
