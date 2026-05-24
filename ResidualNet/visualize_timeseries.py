@@ -90,11 +90,39 @@ def visualize_flight(model_name, horizon, flight_id):
 
     # Plot
     plt.figure(figsize=(15, 6))
-    plt.plot(plot_dates, oracle, label='Oracle Demand', color='black', alpha=0.6, linestyle='--')
-    plt.plot(plot_dates, forecast, label=f'Forecasted ({model_name})', color='red', alpha=0.7)
-    plt.plot(plot_dates, recovered, label='ResidualNet Recovered', color='blue', alpha=0.8)
-    plt.title(f"Demand Comparison for {flight_id} (Test Set, {model_name} H{horizon})")
-    plt.xlabel("Date")
+    
+    # Logic to break lines at gaps
+    # If gap > 1 day, we should insert a Nan or plot segments separately
+    dates_pd = pd.to_datetime(plot_dates)
+    diffs = dates_pd.to_series().diff().dt.days
+    break_indices = np.where(diffs > 1)[0]
+    
+    start_idx = 0
+    for end_idx in list(break_indices) + [len(plot_dates)]:
+        # Plot each segment separately to avoid lines crossing gaps
+        segment_slice = slice(start_idx, end_idx)
+        if start_idx < end_idx:
+            # Only add labels to the first segment
+            label_o = 'Oracle Demand' if start_idx == 0 else None
+            label_f = f'Forecasted ({model_name})' if start_idx == 0 else None
+            label_r = 'ResidualNet Recovered' if start_idx == 0 else None
+            
+            # Use markers, especially for H=1 which might be single points
+            ms = 8 if horizon == 1 else (4 if horizon == 7 else 2)
+            marker = 'o'
+            
+            plt.plot(plot_dates[segment_slice], oracle[segment_slice], color='black', alpha=0.4, linestyle='--', label=label_o, marker=marker, markersize=ms)
+            plt.plot(plot_dates[segment_slice], forecast[segment_slice], color='red', alpha=0.6, label=label_f, marker=marker, markersize=ms)
+            plt.plot(plot_dates[segment_slice], recovered[segment_slice], color='blue', alpha=0.8, label=label_r, marker=marker, markersize=ms)
+        
+        # Draw vertical line at the start of each fold/segment
+        if start_idx < len(plot_dates):
+            plt.axvline(x=plot_dates[start_idx], color='gray', alpha=0.3, linestyle=':', linewidth=0.8)
+            
+        start_idx = end_idx
+
+    plt.title(f"Demand Comparison for {flight_id} (Test Set: {len(break_indices)+1} segments shown)")
+    plt.xlabel("Date (Gaps indicated by vertical dotted lines)")
     plt.ylabel("Demand (kg)")
     plt.legend()
     plt.xticks(rotation=45)
