@@ -46,19 +46,19 @@ TRADE_LANES = {
 # ==========================================
 SEGMENTS = {
     # Shifts from very early (5.0, 1.5) to a more balanced S-curve
-    "Contract":   {"alpha": 1.5, "beta": 2.0, "weight": 0.35}, 
+    "Contract":   {"alpha": 1.5, "beta": 2.0, "weight": 0.35, "density": 180}, 
     
     # Shifts from centered (3.0, 3.0) to late-leaning (resembles your Agent A)
-    "General":    {"alpha": 2.5, "beta": 1.5, "weight": 0.30}, 
+    "General":    {"alpha": 2.5, "beta": 1.5, "weight": 0.30, "density": 167}, 
     
     # Keeps demand active in the final week
-    "Perishable": {"alpha": 3.0, "beta": 1.0, "weight": 0.10}, 
+    "Perishable": {"alpha": 3.0, "beta": 1.0, "weight": 0.10, "density": 140}, 
     
     # Extreme late spike (resembles your Agent B / "hockey stick")
-    "Express":    {"alpha": 8.0, "beta": 0.5, "weight": 0.15}, 
+    "Express":    {"alpha": 8.0, "beta": 0.5, "weight": 0.15, "density": 120}, 
     
     # Keeps a baseline arrival rate until Day 0
-    "Spot":       {"alpha": 1.0, "beta": 1.0, "weight": 0.10}  
+    "Spot":       {"alpha": 1.0, "beta": 1.0, "weight": 0.10, "density": 167}  
 }
 
 BOOKING_WINDOW_DAYS = 15
@@ -90,6 +90,7 @@ DOW_MULTIPLIERS = {
 # 5. FLIGHT SCHEDULING & CAPACITY
 # ==========================================
 AIRCRAFT_CAPACITY_KG = 100000
+AIRCRAFT_CAPACITY_CBM = 600
 SCHEDULE_DESIGN_LOAD_FACTOR = 0.8
 MAX_SHIPMENT_SIZE_KG = 800
 

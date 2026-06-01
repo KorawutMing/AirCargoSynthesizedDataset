@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from config import CITIES, TRADE_LANES, AIRCRAFT_CAPACITY_KG, SCHEDULE_DESIGN_LOAD_FACTOR, SEGMENTS, BOOKING_WINDOW_DAYS
+from config import CITIES, TRADE_LANES, AIRCRAFT_CAPACITY_KG, AIRCRAFT_CAPACITY_CBM, SCHEDULE_DESIGN_LOAD_FACTOR, SEGMENTS, BOOKING_WINDOW_DAYS
 from network import generate_base_network
 from temporal import generate_temporal_dynamics
 from booking_curves import generate_booking_curves
@@ -69,7 +69,8 @@ def generate_final_dataset(years=10):
         
         flight_state, realized_log, latent_log = simulate_flight_booking_window(
             flight_id=f"{row.Origin}-{row.Destination}-{row.Flight_Sequence}-{row.Date.strftime('%Y%m%d')}",
-            total_capacity=AIRCRAFT_CAPACITY_KG,
+            total_capacity_kg=AIRCRAFT_CAPACITY_KG,
+            total_capacity_cbm=AIRCRAFT_CAPACITY_CBM,
             base_demand=row.True_Flight_Demand,
             temporal_mult=1.0, 
             price_matrix=price_matrix,
@@ -80,19 +81,24 @@ def generate_final_dataset(years=10):
         
         # --- Aggregate the Transaction Logs into Flight Summaries ---
         
-        # 1. Calculate Realized vs Latent by Segment
+        # 1. Calculate Realized vs Latent by Segment (KG & CBM)
         segment_realized = {f"Observed_{seg}_kg": 0 for seg in SEGMENTS.keys()}
+        segment_realized_cbm = {f"Observed_{seg}_cbm": 0 for seg in SEGMENTS.keys()}
         segment_latent = {f"Oracle_{seg}_kg": 0 for seg in SEGMENTS.keys()}
+        segment_latent_cbm = {f"Oracle_{seg}_cbm": 0 for seg in SEGMENTS.keys()}
         
         for req in latent_log:
             segment_latent[f"Oracle_{req['segment']}_kg"] += req['weight']
+            segment_latent_cbm[f"Oracle_{req['segment']}_cbm"] += req['volume']
             
         for req in realized_log:
             segment_realized[f"Observed_{req['segment']}_kg"] += req['weight']
+            segment_realized_cbm[f"Observed_{req['segment']}_cbm"] += req['volume']
             
         # 2. Reconstruct the Bookings-on-Hand (BOH) Trajectory
         boh_trajectory = {}
         cumulative_weight = 0
+        cumulative_volume = 0
         sorted_realized = sorted(realized_log, key=lambda x: x['dp'])
         
         request_idx = 0
@@ -101,8 +107,10 @@ def generate_final_dataset(years=10):
         for dp in range(-BOOKING_WINDOW_DAYS, 0):
             while request_idx < total_requests and sorted_realized[request_idx]['dp'] == dp:
                 cumulative_weight += sorted_realized[request_idx]['weight']
+                cumulative_volume += sorted_realized[request_idx]['volume']
                 request_idx += 1
-            boh_trajectory[f'BOH_DP{dp}'] = round(cumulative_weight, 0)
+            boh_trajectory[f'BOH_KG_DP{dp}'] = round(cumulative_weight, 0)
+            boh_trajectory[f'BOH_CBM_DP{dp}'] = round(cumulative_volume, 1)
 
         price_trajectory = {}
         for seg in SEGMENTS.keys():
@@ -112,15 +120,20 @@ def generate_final_dataset(years=10):
         # 3. Compile the row 
         result_row = {
             'Index': row.Index,
-            'Final_True_Demand': round(sum(segment_latent.values()), 0),
-            'Final_Constrained_Bookings': round(sum(segment_realized.values()), 0),
+            'Final_True_Demand_KG': round(sum(segment_latent.values()), 0),
+            'Final_True_Demand_CBM': round(sum(segment_latent_cbm.values()), 1),
+            'Final_Constrained_Bookings_KG': round(sum(segment_realized.values()), 0),
+            'Final_Constrained_Bookings_CBM': round(sum(segment_realized_cbm.values()), 1),
             'Is_Censored': flight_state['is_censored'],
+            'Censored_By': flight_state['censored_by'],
             'Days_Prior_Closed': flight_state['d_close']
         }
         
         # Merge dictionaries and append
         result_row.update(segment_realized)
+        result_row.update(segment_realized_cbm)
         result_row.update(segment_latent)
+        result_row.update(segment_latent_cbm)
         result_row.update(boh_trajectory)
         result_row.update(price_trajectory)
         
@@ -139,14 +152,20 @@ def generate_final_dataset(years=10):
     base_cols = [
         'Date', 'Origin', 'Destination', 'Flight_Sequence', 'Scheduled_Flights',
         'Base_Price_per_kg', 'Price_Index', 
-        'Final_True_Demand', 'Final_Constrained_Bookings',
-        'Is_Censored', 'Days_Prior_Closed'
+        'Final_True_Demand_KG', 'Final_True_Demand_CBM',
+        'Final_Constrained_Bookings_KG', 'Final_Constrained_Bookings_CBM',
+        'Is_Censored', 'Censored_By', 'Days_Prior_Closed'
     ]
     
     # Safely generate the dynamic columns directly from the config keys
     seg_cols = [f"Observed_{seg}_kg" for seg in SEGMENTS.keys()] + \
-               [f"Oracle_{seg}_kg" for seg in SEGMENTS.keys()]
-    curve_cols = [f'BOH_DP{dp}' for dp in range(-BOOKING_WINDOW_DAYS, 0)]
+               [f"Observed_{seg}_cbm" for seg in SEGMENTS.keys()] + \
+               [f"Oracle_{seg}_kg" for seg in SEGMENTS.keys()] + \
+               [f"Oracle_{seg}_cbm" for seg in SEGMENTS.keys()]
+    
+    curve_cols = [f'BOH_KG_DP{dp}' for dp in range(-BOOKING_WINDOW_DAYS, 0)] + \
+                 [f'BOH_CBM_DP{dp}' for dp in range(-BOOKING_WINDOW_DAYS, 0)]
+    
     price_cols = [f'Price_{seg}_DP{dp}' for seg in SEGMENTS.keys() for dp in range(-BOOKING_WINDOW_DAYS, 0)]
     
     df_final = df_final[base_cols + seg_cols + curve_cols + price_cols].copy()
@@ -155,9 +174,9 @@ def generate_final_dataset(years=10):
     return df_final
 
 if __name__ == "__main__":
-    years = 10
+    years = 5
     df = generate_final_dataset(years=years) 
-    df.to_csv(f'./data/air_cargo_{years}yr_dataset.csv', index=False)
+    df.to_csv(f'./data/air_cargo_{years}yr_volumetric_dataset.csv', index=False)
     
     print("\n--- Summary of Generated Dataset ---")
     print(f"Total Flights Simulated: {len(df):,}")
