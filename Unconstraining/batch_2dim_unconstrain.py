@@ -42,10 +42,11 @@ MODEL_SPECS = {
     'EM-X Price': (EMPriceUnconstrainer, 'EMXPrice', {})
 }
 
-# Add PD models
-for tau in [0.3, 0.5, 0.7]:
+# Dynamically add PD and PD-Price models for each tau
+for tau in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
     tau_str = str(tau).replace('.', '')
     MODEL_SPECS[f'PD_{tau}'] = (PDUnconstrainer, f'PD{tau_str}', {'tau': tau})
+    MODEL_SPECS[f'PD-X Price_{tau}'] = (PDPriceUnconstrainer, f'PDXPrice{tau_str}', {'tau': tau})
 
 
 def process_od_pair(args):

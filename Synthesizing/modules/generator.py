@@ -24,18 +24,24 @@ def get_base_price(origin, destination):
     d = CITIES[destination]['macro_region']
     return BASE_PRICE_PER_KG[(o, d)]
 
-def generate_final_dataset(years=10):
-    print("1. Generating Base Network...")
+def generate_final_dataset(years=10, target_load_factor=None, verbose=True):
+    if target_load_factor is None:
+        from config import SCHEDULE_DESIGN_LOAD_FACTOR
+        target_load_factor = SCHEDULE_DESIGN_LOAD_FACTOR
+        
+    if verbose: print("1. Generating Base Network...")
     df_routes = generate_base_network()
     
     # Calculate Static Flight Schedule Once
-    target_capacity = AIRCRAFT_CAPACITY_KG * SCHEDULE_DESIGN_LOAD_FACTOR
+    # target_load_factor controls how many flights we schedule for the base demand.
+    # Higher factor -> fewer flights -> higher realized load factor.
+    target_capacity = AIRCRAFT_CAPACITY_KG * target_load_factor
     df_routes['Scheduled_Flights'] = np.ceil(df_routes['Base_Daily_Demand_KG'] / target_capacity).astype(int)
     
-    print(f"2. Generating {years}-Year Temporal Dynamics...")
+    if verbose: print(f"2. Generating {years}-Year Temporal Dynamics...")
     df_time = generate_temporal_dynamics(years=years)
     
-    print("3. Merging Network and Timeline (Cross Join)...")
+    if verbose: print("3. Merging Network and Timeline (Cross Join)...")
     df_full = df_routes.merge(df_time, how='cross')
     
     # Expand DataFrame to represent individual flights
@@ -44,7 +50,7 @@ def generate_final_dataset(years=10):
     # Assign distinct flight numbers (e.g., Flight 1, Flight 2, Flight 3)
     df_flights['Flight_Sequence'] = df_flights.groupby(['Date', 'Origin', 'Destination']).cumcount() + 1
     
-    print("4. Calculating Base Economics...")
+    if verbose: print("4. Calculating Base Economics...")
     # Apply Trade Lane Noise 
     df_flights['Lane_Column'] = df_flights.apply(lambda x: map_trade_lane(x['Origin'], x['Destination']), axis=1)
     idx, cols = pd.factorize(df_flights['Lane_Column'])
@@ -59,12 +65,16 @@ def generate_final_dataset(years=10):
     # Calculate flight-specific demand 
     df_flights['True_Flight_Demand'] = (df_flights['Base_Daily_Demand_KG'] * df_flights['Final_Multiplier']) / df_flights['Scheduled_Flights']
     
-    print("5. Running Discrete Transaction Engine...")
+    if verbose: print("5. Running Discrete Transaction Engine...")
     df_curves = generate_booking_curves()
     simulation_results = []
     
-    # Iterate over the explicitly expanded flight dataframe using tqdm for the progress bar
-    for row in tqdm(df_flights.itertuples(), total=len(df_flights), desc="Simulating Flights"):
+    # Disable tqdm if not verbose
+    iter_obj = df_flights.itertuples()
+    if verbose:
+        iter_obj = tqdm(iter_obj, total=len(df_flights), desc="Simulating Flights")
+
+    for row in iter_obj:
         price_matrix = calculate_dynamic_prices(row.Base_Price_per_kg, row.Price_Index, SEGMENTS)
         
         flight_state, realized_log, latent_log = simulate_flight_booking_window(
