@@ -124,7 +124,16 @@ def visualize_flight(model_name, horizon, flight_id):
     plt.title(f"Demand Comparison for {flight_id} (Test Set: {len(break_indices)+1} segments shown)")
     plt.xlabel("Date (Gaps indicated by vertical dotted lines)")
     plt.ylabel("Demand (kg)")
-    plt.legend()
+    
+    # Add metrics text box
+    stats_text = (f"Baseline RMSE: {r_o:.2f}\n"
+                  f"Refined RMSE: {r_r:.2f}\n"
+                  f"Improvement: {((r_o-r_r)/r_o*100):.1f}%")
+    plt.gca().text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+                   verticalalignment='top', fontsize=10,
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.legend(loc='upper right')
     plt.xticks(rotation=45)
     plt.tight_layout()
     
