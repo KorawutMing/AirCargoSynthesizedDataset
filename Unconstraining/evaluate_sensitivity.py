@@ -36,39 +36,48 @@ for lf in LF_LEVELS:
     df_eval["Total_Observed_cbm"] = df_eval[[f"Observed_{s}_cbm" for s in SEGMENTS]].sum(axis=1)
     
     # Calculate Realized Load Factors (Average of all flights)
-    # Using 100,000 KG and 600 CBM as capacity constants
     realized_lf_kg = (df_eval["Total_Observed_kg"] / 100000.0).mean() * 100
     realized_lf_cbm = (df_eval["Total_Observed_cbm"] / 600.0).mean() * 100
 
     for m in MODELS:
-        # Reconstruct Total Estimate for this model
-        est_cols = [f"{m}_{s}_Est_kg" for s in SEGMENTS]
-        if all(c in df_eval.columns for c in est_cols):
-            df_eval[f"{m}_Total_Est_kg"] = df_eval[est_cols].sum(axis=1)
-            
-            # Reconstruct Total Estimate CBM
-            est_cols_cbm = [f"{m}_{s}_Est_cbm" for s in SEGMENTS]
-            df_eval[f"{m}_Total_Est_cbm"] = df_eval[est_cols_cbm].sum(axis=1)
-            
-            # 1. Total Weight Metrics
-            yt = df_eval["Total_Oracle_kg"].values
-            yp = df_eval[f"{m}_Total_Est_kg"].values
-            wape_kg = (np.sum(np.abs(yt - yp)) / np.sum(yt)) * 100
-            
-            # 2. Total Volume Metrics
-            yt_c = df_eval["Total_Oracle_cbm"].values
-            yp_c = df_eval[f"{m}_Total_Est_cbm"].values
-            wape_cbm = (np.sum(np.abs(yt_c - yp_c)) / np.sum(yt_c)) * 100
-            
-            results.append({
-                "Target_LF": lf,
-                "Realized_LF_KG": realized_lf_kg,
-                "Realized_LF_CBM": realized_lf_cbm,
-                "Model": m,
-                "WAPE_KG": wape_kg,
-                "WAPE_CBM": wape_cbm,
-                "Total_Censorship_Pct": df_eval["Is_Censored"].mean() * 100
-            })
+        # 1. Reconstruct Total Estimate for this model
+        est_cols_kg = [f"{m}_{s}_Est_kg" for s in SEGMENTS]
+        est_cols_cbm = [f"{m}_{s}_Est_cbm" for s in SEGMENTS]
+        
+        # Check if model columns exist
+        if not all(c in df_eval.columns for c in est_cols_kg):
+            continue
+
+        # CRITICAL FIX: Identify rows where the model has actually finished burn-in
+        # We must NOT treat NaN as 0.0, or we get artificial 100% errors.
+        valid_mask = df_eval[est_cols_kg].notna().all(axis=1)
+        df_valid = df_eval[valid_mask].copy()
+        
+        if len(df_valid) == 0:
+            continue
+
+        df_valid[f"{m}_Total_Est_kg"] = df_valid[est_cols_kg].sum(axis=1)
+        df_valid[f"{m}_Total_Est_cbm"] = df_valid[est_cols_cbm].sum(axis=1)
+        
+        # 2. Total Weight Metrics
+        yt = df_valid["Total_Oracle_kg"].values
+        yp = df_valid[f"{m}_Total_Est_kg"].values
+        wape_kg = (np.sum(np.abs(yt - yp)) / np.sum(yt)) * 100
+        
+        # 3. Total Volume Metrics
+        yt_c = df_valid["Total_Oracle_cbm"].values
+        yp_c = df_valid[f"{m}_Total_Est_cbm"].values
+        wape_cbm = (np.sum(np.abs(yt_c - yp_c)) / np.sum(yt_c)) * 100
+        
+        results.append({
+            "Target_LF": lf,
+            "Realized_LF_KG": realized_lf_kg,
+            "Realized_LF_CBM": realized_lf_cbm,
+            "Model": m,
+            "WAPE_KG": wape_kg,
+            "WAPE_CBM": wape_cbm,
+            "Total_Censorship_Pct": df_valid["Is_Censored"].mean() * 100
+        })
 
 df_res = pd.DataFrame(results)
 df_res.to_csv("Unconstraining/lf_sensitivity_results.csv", index=False)
