@@ -24,10 +24,14 @@ def get_base_price(origin, destination):
     d = CITIES[destination]['macro_region']
     return BASE_PRICE_PER_KG[(o, d)]
 
-def generate_final_dataset(years=10, target_load_factor=None, verbose=True):
+def generate_final_dataset(years=10, target_load_factor=None, demand_multiplier=None, verbose=True):
     if target_load_factor is None:
         from config import SCHEDULE_DESIGN_LOAD_FACTOR
         target_load_factor = SCHEDULE_DESIGN_LOAD_FACTOR
+        
+    if demand_multiplier is None:
+        from config import GLOBAL_DEMAND_MULTIPLIER
+        demand_multiplier = GLOBAL_DEMAND_MULTIPLIER
         
     if verbose: print("1. Generating Base Network...")
     df_routes = generate_base_network()
@@ -63,7 +67,7 @@ def generate_final_dataset(years=10, target_load_factor=None, verbose=True):
     df_flights['Price_Index'] = np.clip(np.random.normal(1.0, PRICE_VOLATILITY, len(df_flights)), 0.7, 1.5)
     
     # Calculate flight-specific demand 
-    df_flights['True_Flight_Demand'] = (df_flights['Base_Daily_Demand_KG'] * df_flights['Final_Multiplier']) / df_flights['Scheduled_Flights']
+    df_flights['True_Flight_Demand'] = (df_flights['Base_Daily_Demand_KG'] * df_flights['Final_Multiplier'] * demand_multiplier) / df_flights['Scheduled_Flights']
     
     if verbose: print("5. Running Discrete Transaction Engine...")
     df_curves = generate_booking_curves()

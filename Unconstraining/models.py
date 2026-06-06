@@ -234,6 +234,7 @@ class EMPriceUnconstrainer(BaseUnconstrainer):
         y = np.ascontiguousarray(observed_bookings, dtype=float).copy()
         cens = np.ascontiguousarray(is_censored, dtype=bool)
         p = np.ascontiguousarray(price_per_kg, dtype=float)
+        p = np.log(np.maximum(p, 0.01)) # Semi-log model: use ln(Price)
 
         if np.all(y == 0) and not np.any(cens):
             return y
@@ -525,6 +526,7 @@ class PDPriceUnconstrainer(BaseUnconstrainer):
         y = np.ascontiguousarray(observed_bookings, dtype=float).copy()
         cens = np.ascontiguousarray(is_censored, dtype=bool)
         p = np.ascontiguousarray(price_per_kg, dtype=float)
+        p = np.log(np.maximum(p, 0.01)) # Semi-log model: use ln(Price)
 
         if np.all(y == 0) and not np.any(cens):
             return y

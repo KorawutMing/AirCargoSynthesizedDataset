@@ -64,10 +64,11 @@ SEGMENTS = {
 BOOKING_WINDOW_DAYS = 15
 
 
-# ==========================================
+# = ==========================================
 # 4. TEMPORAL DYNAMICS
 # ==========================================
 YOY_GROWTH_RATE = 1.03
+GLOBAL_DEMAND_MULTIPLIER = 1.0 # Set > 1.0 for ultra-high demand scenarios
 
 MOY_MULTIPLIERS = {
     1: 0.90,  2: 0.75,  3: 0.95,  4: 1.00, 

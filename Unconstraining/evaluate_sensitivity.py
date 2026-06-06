@@ -6,7 +6,7 @@ from tqdm import tqdm
 from sklearn.metrics import mean_squared_error
 
 # Configuration
-LF_LEVELS = [50, 60, 70, 80, 90, 95]
+LF_LEVELS = [50, 60, 70, 80, 90, 95, 98, 99]
 SEGMENTS = ["Contract", "General", "Perishable", "Express", "Spot"]
 MODELS = ["Naive", "EM", "EMXPrice", "PD05", "PDXPrice05", "PD07", "PDXPrice07", "PD09", "PDXPrice09"]
 
