@@ -99,9 +99,16 @@ class ForecastingExperiment:
         route_df = df[mask]
         
         if self.use_unconstrained:
-            target_cols = [f"EM_{s}_Est" for s in self.segments if f"EM_{s}_Est" in route_df.columns]
+            # Check for EM_{s}_Est_kg first, then EM_{s}_Est
+            target_cols = []
+            for s in self.segments:
+                for suffix in ["_kg", ""]:
+                    col = f"EM_{s}_Est{suffix}"
+                    if col in route_df.columns:
+                        target_cols.append(col)
+                        break
         else:
-            target_cols = [f"Oracle_{s}_kg" for s in self.segments]
+            target_cols = [f"Oracle_{s}_kg" for s in self.segments if f"Oracle_{s}_kg" in route_df.columns]
             
         return route_df.groupby("Date")[target_cols].sum()
 

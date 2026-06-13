@@ -34,10 +34,10 @@ GRAVITY_K = 1.5
 # 'volatility' is the standard deviation for the shared daily macroeconomic noise.
 
 TRADE_LANES = {
-    ("Asia", "US"):   {"name": "Transpacific_Headhaul", "volatility": 0.15}, # High variance, e-commerce driven
-    ("US", "Asia"):   {"name": "Transpacific_Backhaul", "volatility": 0.08}, # Steadier, industrial/agricultural driven
-    ("Asia", "Asia"): {"name": "Intra_Asia",            "volatility": 0.10}, # Moderate variance, manufacturing supply chains
-    ("US", "US"):     {"name": "US_Domestic",           "volatility": 0.05}  # Low variance baseline
+    ("Asia", "US"):   {"name": "Transpacific_Headhaul", "volatility": 0.30}, # High variance, e-commerce driven
+    ("US", "Asia"):   {"name": "Transpacific_Backhaul", "volatility": 0.16}, # Steadier, industrial/agricultural driven
+    ("Asia", "Asia"): {"name": "Intra_Asia",            "volatility": 0.20}, # Moderate variance, manufacturing supply chains
+    ("US", "US"):     {"name": "US_Domestic",           "volatility": 0.10}  # Low variance baseline
 }
 
 

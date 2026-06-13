@@ -11,16 +11,14 @@ class GlobalResidualPredictor(nn.Module):
         # 1. Encoder
         self.enc1 = nn.Sequential(
             nn.Conv2d(in_channels, hidden_dim, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(hidden_dim)
+            nn.ReLU()
         )
         self.pool = nn.MaxPool2d(2) 
         
         # 2. Bottleneck with context
         self.bottleneck = nn.Sequential(
             nn.Conv2d(hidden_dim + extra_dim, hidden_dim * 2, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.BatchNorm2d(hidden_dim * 2)
+            nn.ReLU()
         )
         
         # 3. Decoder

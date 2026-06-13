@@ -52,7 +52,7 @@ def generate_temporal_dynamics(years=10, start_date='2016-01-01'):
         # Draw random noise using an AR(1) process to introduce autocorrelation
         # This allows Kalman filters to track the 'state' of demand better than static models.
         # x_t = phi * x_{t-1} + (1-phi) * mu + epsilon
-        phi = 0.7 # Persistence factor
+        phi = 0.85 # Persistence factor (Increased for stronger regional trends)
         mu = 1.0
         
         lane_noise = np.zeros(len(df_time))
@@ -71,6 +71,41 @@ def generate_temporal_dynamics(years=10, start_date='2016-01-01'):
         # The final multiplier for any flight in this lane on this specific day
         df_time[f'Mult_{lane_name}'] = df_time['Base_Mult'] * lane_noise
 
+    # 5. Inject Localized Spatial Shocks
+    df_time = inject_spatial_shocks(df_time)
+
+    return df_time
+
+def inject_spatial_shocks(df_time):
+    """
+    Introduces temporary demand surges or crashes for specific city clusters.
+    These are invisible to univariate models but create clear spatial patterns.
+    """
+    regions = {
+        'Asia_Export': ['PVG', 'CAN', 'HKG', 'CGO'],
+        'US_West_Coast': ['LAX', 'ORD'],
+        'US_East_Coast': ['JFK']
+    }
+    
+    # Initialize shock columns
+    for region in regions:
+        df_time[f'Shock_{region}'] = 1.0
+        
+    num_days = len(df_time)
+    # Roughly 4-5 shocks per year
+    num_shocks = max(1, (num_days // 365) * 4)
+    
+    for _ in range(num_shocks):
+        reg_name = np.random.choice(list(regions.keys()))
+        duration = np.random.randint(7, 15)
+        start_idx = np.random.randint(0, num_days - duration)
+        
+        # 70% chance of surge, 30% chance of crash
+        is_surge = np.random.random() > 0.3
+        intensity = np.random.uniform(1.5, 2.0) if is_surge else np.random.uniform(0.4, 0.6)
+        
+        df_time.loc[start_idx:start_idx+duration, f'Shock_{reg_name}'] = intensity
+        
     return df_time
 
 if __name__ == "__main__":

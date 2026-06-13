@@ -29,8 +29,8 @@ from models import (
     PDPriceUnconstrainer
 )
 
-DATA_PATH = "data/air_cargo_5yr_volumetric_dataset.csv"
-SAVE_DIR = "Unconstraining/unconstrained_2dim_results"
+DATA_PATH = "data/air_cargo_3yr_LF_80.csv"
+SAVE_DIR = "Unconstraining/results/unconstrained_3yr"
 LOOKBACK = 365
 
 os.makedirs(SAVE_DIR, exist_ok=True)

@@ -24,6 +24,73 @@ def get_base_price(origin, destination):
     d = CITIES[destination]['macro_region']
     return BASE_PRICE_PER_KG[(o, d)]
 
+def apply_shocks(df_flights):
+    """
+    Applies the regional shocks generated in temporal.py to the flight demand.
+    """
+    regions = {
+        'Asia_Export': ['PVG', 'CAN', 'HKG', 'CGO'],
+        'US_West_Coast': ['LAX', 'ORD'],
+        'US_East_Coast': ['JFK']
+    }
+    
+    for reg_name, cities in regions.items():
+        shock_col = f'Shock_{reg_name}'
+        if shock_col in df_flights.columns:
+            # Apply shock if either Origin or Destination is in the city list
+            mask = df_flights['Origin'].isin(cities) | df_flights['Destination'].isin(cities)
+            df_flights.loc[mask, 'True_Flight_Demand'] *= df_flights.loc[mask, shock_col]
+            
+    return df_flights
+
+def apply_network_spill(df_flights):
+    """
+    Models demand substitution. If a flight is heavily over-capacitated,
+    a portion of the overflow 'spills' to a nearby substitute route.
+    """
+    # Sort by date to process chronologically
+    df_flights = df_flights.sort_values('Date').reset_index(drop=True)
+    
+    # 1. Calculate Spill
+    # If demand > 120% capacity, 50% of the excess spills
+    overflow_threshold = AIRCRAFT_CAPACITY_KG * 1.2
+    spill_rate = 0.5
+    
+    # Create a column to track spill contributions
+    df_flights['Spilled_Out'] = 0.0
+    mask_overflow = df_flights['True_Flight_Demand'] > overflow_threshold
+    
+    excess = df_flights.loc[mask_overflow, 'True_Flight_Demand'] - AIRCRAFT_CAPACITY_KG
+    spill_amt = excess * spill_rate
+    df_flights.loc[mask_overflow, 'Spilled_Out'] = spill_amt
+    df_flights.loc[mask_overflow, 'True_Flight_Demand'] -= spill_amt
+    
+    # 2. Redistribute Spill
+    # Aggregate spill by (Date, Origin_Macro, Destination_Macro)
+    df_flights['Orig_Macro'] = df_flights['Origin'].map(lambda x: CITIES[x]['macro_region'])
+    df_flights['Dest_Macro'] = df_flights['Destination'].map(lambda x: CITIES[x]['macro_region'])
+    
+    spill_totals = df_flights.groupby(['Date', 'Orig_Macro', 'Dest_Macro'])['Spilled_Out'].sum().reset_index()
+    spill_totals = spill_totals[spill_totals['Spilled_Out'] > 0]
+    
+    if spill_totals.empty:
+        return df_flights.drop(columns=['Spilled_Out', 'Orig_Macro', 'Dest_Macro'])
+
+    # Merge totals back to redistribute
+    df_flights = df_flights.merge(spill_totals, on=['Date', 'Orig_Macro', 'Dest_Macro'], how='left', suffixes=('', '_Total'))
+    df_flights['Spilled_Out_Total'] = df_flights['Spilled_Out_Total'].fillna(0)
+    
+    # Count eligible flights per macro-lane per day
+    counts = df_flights.groupby(['Date', 'Orig_Macro', 'Dest_Macro']).size().reset_index(name='Flight_Count')
+    df_flights = df_flights.merge(counts, on=['Date', 'Orig_Macro', 'Dest_Macro'], how='left')
+    
+    # Add redistibuted spill (excluding the original spilled-out amount to avoid infinite loop/self-reinforcement)
+    # Actually, just distribute the total pool minus the individual's contribution is too complex.
+    # Simple way: Distribute total pool to all.
+    df_flights['True_Flight_Demand'] += df_flights['Spilled_Out_Total'] / df_flights['Flight_Count']
+    
+    return df_flights.drop(columns=['Spilled_Out', 'Spilled_Out_Total', 'Flight_Count', 'Orig_Macro', 'Dest_Macro'])
+
 def generate_final_dataset(years=10, target_load_factor=None, demand_multiplier=None, verbose=True):
     if target_load_factor is None:
         from config import SCHEDULE_DESIGN_LOAD_FACTOR
@@ -68,6 +135,12 @@ def generate_final_dataset(years=10, target_load_factor=None, demand_multiplier=
     
     # Calculate flight-specific demand 
     df_flights['True_Flight_Demand'] = (df_flights['Base_Daily_Demand_KG'] * df_flights['Final_Multiplier'] * demand_multiplier) / df_flights['Scheduled_Flights']
+    
+    # 4.1 Apply Localized Spatial Shocks
+    df_flights = apply_shocks(df_flights)
+    
+    # 4.2 Apply Network Spill (Demand Substitution)
+    df_flights = apply_network_spill(df_flights)
     
     if verbose: print("5. Running Discrete Transaction Engine...")
     df_curves = generate_booking_curves()

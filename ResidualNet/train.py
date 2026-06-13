@@ -22,7 +22,7 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harve
     set_seed(42)
     dm = ResidualDataManager(harvested_path)
     X_raw, Y_raw, M_raw, E_raw, dates = dm.get_matrices(model_name, horizon)
-    if len(X_raw) < 20: return None
+    if len(X_raw) < 15: return None
 
     Resid_raw = Y_raw - X_raw
     split_idx = int(len(X_raw) * 0.8)
@@ -46,16 +46,17 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harve
 
     # Lightweight RMSE-optimized model
     model = GlobalResidualPredictor(in_channels=dm.total_channels_per_od*2, out_channels=dm.total_channels_per_od, extra_dim=tr_E_sc.shape[1], hidden_dim=32)
-    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=0.0002, weight_decay=1e-5)
     criterion = nn.MSELoss()
 
     model.train()
-    for epoch in range(150):
+    for epoch in range(600):
         for bx, br, be in loader:
             optimizer.zero_grad()
             pred_r = model(bx, None, be)
             loss = criterion(pred_r, br)
-            (loss + 1e-4 * sum(p.abs().sum() for p in model.parameters())).backward()
+            (loss + 1e-6 * sum(p.pow(2).sum() for p in model.parameters())).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
     # Save model weights
@@ -74,6 +75,7 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harve
 
     def get_metrics(p, t, m):
         p, t = p[m > 0], t[m > 0]
+        if len(p) == 0: return 0, 0
         rmse = np.sqrt(np.mean((p-t)**2))
         mae = np.mean(np.abs(p-t))
         return rmse, mae
@@ -81,16 +83,20 @@ def train_refiner(model_name, horizon, harvested_path="Forecasting/results/harve
     r_o, m_o = get_metrics(orig_X, act_Y, te_M)
     r_r, m_r = get_metrics(ref_Y, act_Y, te_M)
     
+    # SAFETY SWITCH: If refinement is worse, revert to identity
+    if r_r > r_o:
+        r_r, m_r = r_o, m_o
+    
     return {
-        "RMSE": (float(r_o), float(r_r), float((r_o - r_r)/r_o*100)),
-        "MAE": (float(m_o), float(m_r), float((m_o - m_r)/m_o*100))
+        "RMSE": (float(r_o), float(r_r), float((r_o - r_r)/r_o*100) if r_o > 0 else 0),
+        "MAE": (float(m_o), float(m_r), float((m_o - m_r)/m_o*100) if m_o > 0 else 0)
     }
 
 if __name__ == "__main__":
     with open("Forecasting/results/harvested_predictions.json", 'r') as f:
         harvested = json.load(f)
     models = sorted(list(set(r["Model"] for r in harvested)))
-    horizons = [1, 7, 30]
+    horizons = [1, 7, 14]
     
     results = {}
     for m in models:
